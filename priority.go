@@ -5,19 +5,6 @@ import (
 	"time"
 )
 
-type Config struct {
-	Workers  int                     // default = CPU * 2
-	Size     int                     // default = Workers * 64
-	Timeout  int                     // default = 30
-	Priority priority                // default = Normal
-	Preset   map[string]PresetConfig // default = empty
-}
-
-type PresetConfig struct {
-	Priority string
-	Timeout  int
-}
-
 type priority int
 
 const (
@@ -42,7 +29,7 @@ func (c *Config) getPresetPriority(name string) priority {
 			return priorityNormal
 		}
 	}
-	return c.Priority
+	return priorityNormal
 }
 
 func (c *Config) getQueueTimeout(name string) time.Duration {

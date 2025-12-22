@@ -7,10 +7,11 @@ import (
 
 type task struct {
 	ID       string
-	preset   string // 自訂通道名稱
+	preset   string
 	priority priority
 	action   func(ctx context.Context) error
 	timeout  time.Duration
+	callback func(id string, err error)
 	startAt  time.Time
 }
 

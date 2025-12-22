@@ -18,7 +18,7 @@ func TestBasic(t *testing.T) {
 	var count atomic.Int32
 
 	for i := 0; i < 5; i++ {
-		queue.Enqueue("", func(ctx context.Context) error {
+		queue.Enqueue(ctx, "", func(ctx context.Context) error {
 			count.Add(1)
 			return nil
 		})
@@ -30,7 +30,7 @@ func TestBasic(t *testing.T) {
 		t.Errorf("expected 5, got %d", count.Load())
 	}
 
-	queue.Shutdown()
+	queue.Shutdown(ctx)
 }
 
 func TestShutdown(t *testing.T) {
@@ -42,14 +42,14 @@ func TestShutdown(t *testing.T) {
 	var count atomic.Int32
 
 	for i := 0; i < 5; i++ {
-		queue.Enqueue("", func(ctx context.Context) error {
+		queue.Enqueue(ctx, "", func(ctx context.Context) error {
 			count.Add(1)
 			time.Sleep(10 * time.Millisecond)
 			return nil
 		})
 	}
 
-	queue.Shutdown() // 等待全部完成
+	queue.Shutdown(ctx) // 等待全部完成
 
 	if count.Load() != 5 {
 		t.Errorf("expected 5, got %d", count.Load())
@@ -65,7 +65,7 @@ func TestContextCancel(t *testing.T) {
 	var count atomic.Int32
 
 	// 塞一個會等很久的任務
-	queue.Enqueue("", func(ctx context.Context) error {
+	queue.Enqueue(ctx, "", func(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -79,7 +79,7 @@ func TestContextCancel(t *testing.T) {
 
 	cancel() // 取消 context
 
-	queue.Shutdown()
+	queue.Shutdown(context.Background())
 
 	if count.Load() != 0 {
 		t.Errorf("expected 0 (cancelled), got %d", count.Load())
@@ -97,7 +97,7 @@ func TestMultipleWorkers(t *testing.T) {
 	var current atomic.Int32
 
 	for i := 0; i < 8; i++ {
-		queue.Enqueue("", func(ctx context.Context) error {
+		queue.Enqueue(ctx, "", func(ctx context.Context) error {
 			c := current.Add(1)
 			// 記錄最大併發數
 			for {
@@ -113,7 +113,7 @@ func TestMultipleWorkers(t *testing.T) {
 		})
 	}
 
-	queue.Shutdown()
+	queue.Shutdown(ctx)
 
 	if count.Load() != 8 {
 		t.Errorf("expected 8, got %d", count.Load())
@@ -127,7 +127,7 @@ func TestMultipleWorkers(t *testing.T) {
 }
 
 func TestPriorityOrder(t *testing.T) {
-	sched := New(&Config{
+	queue := New(&Config{
 		Workers: 1, // 單 worker 確保順序
 		Preset: map[string]PresetConfig{
 			"low":    {Priority: "low"},
@@ -142,21 +142,21 @@ func TestPriorityOrder(t *testing.T) {
 	var mu sync.Mutex
 
 	// 先塞任務,還沒啟動
-	sched.Enqueue("low", func(ctx context.Context) error {
+	queue.Enqueue(ctx, "low", func(ctx context.Context) error {
 		mu.Lock()
 		order = append(order, "low")
 		mu.Unlock()
 		return nil
 	})
 
-	sched.Enqueue("high", func(ctx context.Context) error {
+	queue.Enqueue(ctx, "high", func(ctx context.Context) error {
 		mu.Lock()
 		order = append(order, "high")
 		mu.Unlock()
 		return nil
 	})
 
-	sched.Enqueue("normal", func(ctx context.Context) error {
+	queue.Enqueue(ctx, "normal", func(ctx context.Context) error {
 		mu.Lock()
 		order = append(order, "normal")
 		mu.Unlock()
@@ -164,8 +164,8 @@ func TestPriorityOrder(t *testing.T) {
 	})
 
 	// 啟動後執行
-	sched.Start(ctx)
-	sched.Shutdown()
+	queue.Start(ctx)
+	queue.Shutdown(ctx)
 
 	expected := []string{"high", "normal", "low"}
 	if len(order) != len(expected) {

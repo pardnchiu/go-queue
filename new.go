@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sync"
 	"time"
@@ -13,20 +14,33 @@ import (
 type Queue struct {
 	config  *Config
 	pending *pending
-	ctx     context.Context
-	wg      sync.WaitGroup
-	mu      sync.RWMutex
-	closed  bool
+	// stats   atomicStats
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	mu     sync.RWMutex
+	closed bool
+}
+
+type Config struct {
+	Workers int                     // default = CPU * 2
+	Size    int                     // default = Workers * 64
+	Timeout int                     // default = 30
+	Preset  map[string]PresetConfig // default = empty
+}
+
+type PresetConfig struct {
+	Priority string // nil = 用 DefaultPriority
+	Timeout  int    // 0 = 依 Priority 自動計算（秒）
 }
 
 func New(config *Config) *Queue {
 	worker := runtime.NumCPU() * 2
 	newConfig := &Config{
-		Workers:  worker,
-		Size:     worker * 64,
-		Timeout:  30,
-		Priority: priorityNormal,
-		Preset:   make(map[string]PresetConfig),
+		Workers: worker,
+		Size:    worker * 64,
+		Timeout: 30,
+		Preset:  make(map[string]PresetConfig),
 	}
 
 	if config != nil {
@@ -39,9 +53,6 @@ func New(config *Config) *Queue {
 		if config.Timeout != 0 {
 			newConfig.Timeout = config.Timeout
 		}
-		if config.Priority != 0 {
-			newConfig.Priority = config.Priority
-		}
 		if config.Preset != nil {
 			newConfig.Preset = make(map[string]PresetConfig)
 			for k, v := range config.Preset {
@@ -49,29 +60,34 @@ func New(config *Config) *Queue {
 			}
 		}
 	}
-	q := &Queue{
+
+	return &Queue{
 		config:  newConfig,
-		pending: newPending(newConfig.Size),
+		pending: newPending(newConfig.Size, newConfig.getPromotion()),
 	}
-	return q
 }
 
 func (q *Queue) Start(ctx context.Context) {
-	q.ctx = ctx
+	q.ctx, q.cancel = context.WithCancel(ctx)
+
 	for i := 0; i < q.config.Workers; i++ {
 		q.wg.Add(1)
-		go q.worker(ctx)
+		go q.worker()
 	}
 }
 
-func (q *Queue) worker(ctx context.Context) {
+func (q *Queue) worker() {
 	defer q.wg.Done()
 
 	for {
-		task, ok := q.pending.Pop()
+		task, promotions, ok := q.pending.Pop()
 
 		if !ok {
 			return
+		}
+
+		for _, e := range promotions {
+			slog.Debug("task.promoted", "id", e.taskID, "from", e.from, "to", e.to)
 		}
 
 		q.execute(task)
@@ -82,70 +98,121 @@ func (q *Queue) execute(task *task) {
 	ctx, cancel := context.WithTimeout(q.ctx, task.timeout)
 	defer cancel()
 
-	errChan := make(chan error, 1)
+	start := time.Now()
+
+	type result struct {
+		err error
+	}
+	done := make(chan result, 1)
 
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				errChan <- fmt.Errorf("panic: %v", r)
+				done <- result{err: fmt.Errorf("panic: %v", r)}
 				return
 			}
 		}()
-		errChan <- task.action(ctx)
+		err := task.action(ctx)
+		done <- result{err: err}
 	}()
-
 	var err error
 	select {
-	case err = <-errChan:
+	case r := <-done:
+		err = r.err
 	case <-ctx.Done():
 		if ctx.Err() == context.DeadlineExceeded {
 			err = fmt.Errorf("task timeout after %s", task.timeout)
 		} else {
 			err = ctx.Err()
 		}
-		go func() {
-			<-errChan
-		}()
+		leakTimeout := time.NewTimer(5 * time.Second)
+		select {
+		case <-done:
+			leakTimeout.Stop()
+		case <-leakTimeout.C:
+			slog.Warn("task.leaked", "id", task.ID, "preset", task.preset, "timeout", task.timeout)
+		}
 	}
 
+	elapsed := time.Since(start)
+
 	if err != nil {
-		fmt.Printf("Task %s failed: %v\n", task.ID, err)
+		slog.Error("task.failed", "id", task.ID, "preset", task.preset, "error", err, "elapsed_ms", elapsed.Milliseconds())
 	} else {
-		fmt.Printf("Task %s completed successfully\n", task.ID)
+		slog.Info("task.completed", "id", task.ID, "preset", task.preset, "elapsed_ms", elapsed.Milliseconds())
+	}
+
+	if task.callback != nil {
+		go task.callback(task.ID, err)
 	}
 }
 
-func (q *Queue) Enqueue(presetName string, action func(ctx context.Context) error) (string, error) {
-	q.mu.RLock()
-	if q.closed {
-		q.mu.RUnlock()
-		return "", fmt.Errorf("enqueue failed: scheduler is closed")
+func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx context.Context) error, options ...EnqueueOption) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	default:
 	}
-	q.mu.RUnlock()
+
+	config := &enqueueConfig{
+		timeout: q.config.getQueueTimeout(presetName),
+	}
+	for _, option := range options {
+		option(config)
+	}
+
+	if config.taskID == "" {
+		config.taskID = generateUUID()
+	}
 
 	task := &task{
-		ID:       generateUUID(),
+		ID:       config.taskID,
 		preset:   presetName,
 		priority: q.config.getPresetPriority(presetName),
 		action:   action,
-		timeout:  q.config.getQueueTimeout(presetName),
+		timeout:  config.timeout,
+		callback: config.callback,
 		startAt:  time.Now(),
 	}
 
-	if err := q.pending.Push(task); err != nil {
+	q.mu.Lock()
+	if q.closed {
+		q.mu.Unlock()
+		return "", fmt.Errorf("enqueue failed: scheduler is closed")
+	}
+	err := q.pending.Push(task)
+	q.mu.Unlock()
+
+	if err != nil {
 		return "", err
 	}
+
 	return task.ID, nil
 }
 
-func (q *Queue) Shutdown() {
+func (q *Queue) Shutdown(ctx context.Context) error {
 	q.mu.Lock()
 	q.closed = true
 	q.mu.Unlock()
 
 	q.pending.Close()
 
-	q.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		q.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		if q.cancel != nil {
+			q.cancel()
+		}
+		return fmt.Errorf("shutdown timeout: %d tasks remaining", q.pending.Len())
+	}
+
+	return nil
 }
 
 func generateUUID() string {
