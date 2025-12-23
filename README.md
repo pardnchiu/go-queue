@@ -2,19 +2,19 @@
 > This README was translated by ChatGPT 5-mini
 # Go Task Queue
 
-> Lightweight Golang priority queue that supports bounded concurrency, priority promotion, and graceful shutdown. Maximizes hardware utilization and prevents system overload.  
+> Lightweight Golang priority queue that supports bounded concurrency, priority promotion, error retry, and graceful shutdown. Maximizes hardware utilization and prevents system overload.  
 > Suitable for scenarios that need controlled concurrent task execution with priority scheduling.
 
 [![pkg](https://pkg.go.dev/badge/github.com/pardnchiu/go-queue.svg)](https://pkg.go.dev/github.com/pardnchiu/go-queue)
 [![card](https://goreportcard.com/badge/github.com/pardnchiu/go-queue)](https://goreportcard.com/report/github.com/pardnchiu/go-queue)
-[![codecov](https://img.shields.io/codecov/c/github/pardnchiu/go-queue)](https://app.codecov.io/github/pardnchiu/go-queue)
+[![codecov](https://img.shields.io/codecov/c/github/pardnchiu/go-queue/master)](https://app.codecov.io/github/pardnchiu/go-queue/tree/master)
 [![version](https://img.shields.io/github/v/tag/pardnchiu/go-queue?label=release)](https://github.com/pardnchiu/go-queue/releases)
 [![license](https://img.shields.io/github/license/pardnchiu/go-queue)](LICENSE)
 
 - [Core Features](#core-features)
   - [Bounded Concurrency](#bounded-concurrency)
-  - [Priority Queue](#priority-queue)
-  - [Priority Promotion](#priority-promotion)
+  - [Priority Queue and Promotion](#priority-queue-and-promotion)
+  - [Error Retry](#error-retry)
 - [Flowchart](#flowchart)
 - [Usage](#usage)
   - [Installation](#installation)
@@ -22,12 +22,14 @@
     - [Basic Usage](#basic-usage)
     - [Using Preset Configs](#using-preset-configs)
     - [Using Options](#using-options)
+    - [Using Retry](#using-retry)
 - [Configuration](#configuration)
 - [Priority Levels](#priority-levels)
 - [Available Functions](#available-functions)
   - [Queue Management](#queue-management)
   - [Enqueue Options](#enqueue-options)
 - [Priority Promotion](#priority-promotion-1)
+- [Retry Mechanism](#retry-mechanism)
 - [Timeout Mechanism](#timeout-mechanism)
 - [Use Cases](#use-cases)
 - [License](#license)
@@ -39,11 +41,12 @@
 ### Bounded Concurrency
 Configurable worker pool size (default: CPU cores × 2). Tasks beyond worker capacity queue up to avoid system overload while maximizing hardware utilization.
 
-### Priority Queue
-A four-level priority system implemented with a min-heap (Immediate > High > Normal > Low). Higher-priority tasks execute first; tasks with the same priority are processed FIFO.
-
-### Priority Promotion
+### Priority Queue and Promotion
+A five-level priority system implemented with a min-heap (Immediate > High > Retry > Normal > Low). Higher-priority tasks execute first; tasks with the same priority are processed FIFO.
 Tasks that wait for a long time are automatically promoted to a higher priority to prevent starvation. Promotion thresholds are calculated based on configured timeouts.
+
+### Error Retry
+When a task fails, it can be automatically retried. Retry tasks are re-enqueued with `Retry` priority, which is between `High` and `Normal`, providing a delayed retry effect.
 
 ## Flowchart
 
@@ -59,7 +62,7 @@ graph TB
   Start[Start]
   Enqueue[Enqueue Task]
   Close[Shutdown]
-  Options[WithTaskID<br>WithTimeout<br>WithCallback]
+  Options[WithTaskID<br>WithTimeout<br>WithCallback<br>WithRetry]
   end
 
   subgraph "Task Management"
@@ -74,12 +77,14 @@ graph TB
   WorkerN[Worker N...]
   Execute[execute task]
   Callback[callback]
+  Retry[setRetry retry]
   end
 
   subgraph "Priority System"
   Priority[priority]
   Immediate[Immediate]
   High[High]
+  RetryPri[Retry]
   Normal[Normal]
   Low[Low]
   InsertAt[insertAt / ordering]
@@ -104,11 +109,13 @@ graph TB
 
   Priority -.-> Immediate
   Priority -.-> High
+  Priority -.-> RetryPri
   Priority -.-> Normal
   Priority -.-> Low
 
   Immediate -.-> InsertAt
   High -.-> InsertAt
+  RetryPri -.-> InsertAt
   Normal -.-> InsertAt
   Low -.-> InsertAt
 
@@ -120,7 +127,9 @@ graph TB
   Worker2 -->|execute| Execute
   WorkerN -->|execute| Execute
 
-  Execute -->|trigger| Callback
+  Execute -->|success| Callback
+  Execute -->|fail & retryable| Retry
+  Retry -->|re-enqueue| Pending
 ```
 
 </details>
@@ -149,6 +158,34 @@ stateDiagram
   timeout * 2
   range 30-120s
   end note
+```
+
+</details>
+
+<details>
+<summary>Retry Flow</summary>
+
+```mermaid
+stateDiagram
+  [*] --> Execute: task starts
+  
+  Execute --> Success: execution succeeds
+  Execute --> Failed: execution fails
+  
+  Success --> Callback: trigger callback
+  Callback --> [*]
+  
+  Failed --> CheckRetry: check retry
+  
+  CheckRetry --> SetRetry: retryOn && retryTimes < retryMax
+  CheckRetry --> Exhausted: retryTimes >= retryMax
+  CheckRetry --> NoRetry: retryOn == false
+  
+  SetRetry --> Pending: re-enqueue with Retry priority
+  Pending --> Execute: wait for execution
+  
+  Exhausted --> [*]: log task.exhausted
+  NoRetry --> [*]: log task.failed
 ```
 
 </details>
@@ -282,15 +319,11 @@ func main() {
   return heavyComputation()
   }, queue.WithTimeout(5*time.Minute))
   
-  // Custom callback
+  // Custom callback (only triggered on success)
   q.Enqueue(ctx, "", func(ctx context.Context) error {
   return sendEmail()
-  }, queue.WithCallback(func(id string, err error) {
-  if err != nil {
-    fmt.Printf("task %s failed: %v\n", id, err)
-  } else {
-    fmt.Printf("task %s completed\n", id)
-  }
+  }, queue.WithCallback(func(id string) {
+  fmt.Printf("task %s completed\n", id)
   }))
   
   // Combined options
@@ -299,8 +332,8 @@ func main() {
   },
   queue.WithTaskID("import-daily"),
   queue.WithTimeout(10*time.Minute),
-  queue.WithCallback(func(id string, err error) {
-    logResult(id, err)
+  queue.WithCallback(func(id string) {
+    logSuccess(id)
   }),
   )
 }
@@ -328,8 +361,11 @@ type PresetConfig struct {
 |------------|-------|----------------------------|---------------------|
 | Immediate  | 0     | timeout / 4 (15-120s)      | Payments, alerts    |
 | High       | 1     | timeout / 2 (15-120s)      | User-initiated ops  |
-| Normal     | 2     | timeout (15-120s)          | Background tasks    |
-| Low        | 3     | timeout × 2 (15-120s)      | Cleanup, analytics  |
+| Retry      | 2     | timeout / 2 (15-120s)      | Failed task retry (internal use) |
+| Normal     | 3     | timeout (15-120s)          | Background tasks    |
+| Low        | 4     | timeout × 2 (15-120s)      | Cleanup, analytics  |
+
+> **Note**: `Retry` priority is managed internally by the system and cannot be directly specified by users.
 
 ## Available Functions
 
@@ -379,11 +415,21 @@ type PresetConfig struct {
   queue.WithTimeout(5 * time.Minute)
   ```
 
-- `WithCallback(fn)` - set completion callback
+- `WithCallback(fn)` - set completion callback (only triggered on success)
   ```go
-  queue.WithCallback(func(id string, err error) {
-  // called asynchronously after task completion
+  queue.WithCallback(func(id string) {
+  // called asynchronously after task succeeds
   })
+  ```
+
+- `WithRetry(maxRetry)` - enable error retry
+  ```go
+  // use default max retries (3)
+  queue.WithRetry(nil)
+  
+  // specify max retries
+  maxRetry := 5
+  queue.WithRetry(&maxRetry)
   ```
 
 ## Priority Promotion
@@ -394,10 +440,27 @@ Waiting tasks in the queue are automatically promoted to prevent starvation:
 |-------------------|------------------|----------------------------------------|
 | Low               | Normal           | clamp(timeout, 30s, 120s)              |
 | Normal            | High             | clamp(timeout × 2, 30s, 120s)          |
+| Retry             | -                | no promotion (managed by retry mechanism) |
 | High              | -                | no promotion (already high priority)   |
 | Immediate         | -                | no promotion (highest priority)        |
 
 Promotion is checked each time a worker pops a task from the queue.
+
+## Retry Mechanism
+
+When `WithRetry` is enabled, failed tasks are automatically retried:
+
+| Stage | Behavior |
+|-------|----------|
+| Failed and `retryTimes < retryMax` | Re-enqueued with `Retry` priority |
+| Failed and `retryTimes >= retryMax` | Log `task.exhausted`, terminate task |
+| Success | Trigger callback (if configured) |
+
+**Retry Characteristics**:
+- Retry tasks have `Retry` priority, which is between `High` and `Normal`
+- Each retry resets `startAt`, entering the end of the queue (within same priority)
+- `Retry` priority does not participate in automatic promotion to avoid interfering with normal priority scheduling
+- Default max retries is 3, customizable via `WithRetry(&maxRetry)`
 
 ## Timeout Mechanism
 
@@ -406,7 +469,7 @@ Promotion is checked each time a worker pops a task from the queue.
 - On timeout:
   - the task's context is canceled
   - an error is logged
-  - the callback receives a timeout error (if configured)
+  - if retry is enabled, it's treated as a failure and retry is attempted
   - goroutine leak detection: if the task doesn't respond to cancellation within 5 seconds, a warning is emitted
 
 ## Use Cases

@@ -14,12 +14,11 @@ import (
 type Queue struct {
 	config  *Config
 	pending *pending
-	// stats   atomicStats
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	mu     sync.RWMutex
-	closed bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	mu      sync.RWMutex
+	closed  bool
 }
 
 type Config struct {
@@ -137,14 +136,75 @@ func (q *Queue) execute(task *task) {
 	elapsed := time.Since(start)
 
 	if err != nil {
-		slog.Error("task.failed", "id", task.ID, "preset", task.preset, "error", err, "elapsed_ms", elapsed.Milliseconds())
+		if task.retryOn && task.retryTimes < task.retryMax {
+			if retryErr := q.setRetry(task, err, elapsed); retryErr != nil {
+				slog.Error("task.retry_failed",
+					"id", task.ID,
+					"preset", task.preset,
+					"retry_times", task.retryTimes,
+					"retry_max", task.retryMax,
+					"error", err,
+					"retry_error", retryErr,
+				)
+			}
+			return
+		}
+
+		if task.retryOn && task.retryTimes >= task.retryMax {
+			slog.Error("task.exhausted",
+				"id", task.ID,
+				"preset", task.preset,
+				"retry_times", task.retryTimes,
+				"retry_max", task.retryMax,
+				"error", err,
+				"elapsed_ms", elapsed.Milliseconds(),
+			)
+		} else {
+			slog.Error("task.failed",
+				"id", task.ID,
+				"preset", task.preset,
+				"error", err,
+				"elapsed_ms", elapsed.Milliseconds(),
+			)
+		}
 	} else {
-		slog.Info("task.completed", "id", task.ID, "preset", task.preset, "elapsed_ms", elapsed.Milliseconds())
+
+		slog.Info("task.completed",
+			"id", task.ID,
+			"preset", task.preset,
+			"retry_times", task.retryTimes,
+			"elapsed_ms", elapsed.Milliseconds(),
+		)
+
+		// * Callback after task completion
+		if task.callback != nil {
+			go task.callback(task.ID)
+		}
+	}
+}
+
+func (q *Queue) setRetry(task *task, err error, elapsed time.Duration) error {
+	slog.Warn("task.retrying",
+		"id", task.ID,
+		"preset", task.preset,
+		"retry_times", task.retryTimes,
+		"retry_max", task.retryMax,
+		"error", err,
+		"elapsed_ms", elapsed.Milliseconds(),
+	)
+
+	task.retryTimes++
+	task.priority = priorityRetry
+	task.startAt = time.Now()
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	if q.closed {
+		return fmt.Errorf("queue closed, cannot retry")
 	}
 
-	if task.callback != nil {
-		go task.callback(task.ID, err)
-	}
+	return q.pending.Push(task)
 }
 
 func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx context.Context) error, options ...EnqueueOption) (string, error) {
@@ -165,6 +225,14 @@ func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx 
 		config.taskID = generateUUID()
 	}
 
+	var retryMax int
+	if config.retryOn {
+		retryMax = 3
+		if config.retryMax != nil {
+			retryMax = *config.retryMax
+		}
+	}
+
 	task := &task{
 		ID:       config.taskID,
 		preset:   presetName,
@@ -173,6 +241,8 @@ func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx 
 		timeout:  config.timeout,
 		callback: config.callback,
 		startAt:  time.Now(),
+		retryOn:  config.retryOn,
+		retryMax: retryMax,
 	}
 
 	q.mu.Lock()

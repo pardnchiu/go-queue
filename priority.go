@@ -10,6 +10,7 @@ type priority int
 const (
 	priorityImmediate priority = iota
 	priorityHigh
+	priorityRetry
 	priorityNormal
 	priorityLow
 )
@@ -43,6 +44,8 @@ func (c *Config) getQueueTimeout(name string) time.Duration {
 	case priorityImmediate:
 		sec = timeout / 4
 	case priorityHigh:
+		sec = timeout / 2
+	case priorityRetry:
 		sec = timeout / 2
 	case priorityNormal:
 		sec = timeout

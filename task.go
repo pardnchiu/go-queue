@@ -6,13 +6,16 @@ import (
 )
 
 type task struct {
-	ID       string
-	preset   string
-	priority priority
-	action   func(ctx context.Context) error
-	timeout  time.Duration
-	callback func(id string, err error)
-	startAt  time.Time
+	ID         string
+	preset     string
+	priority   priority
+	action     func(ctx context.Context) error
+	timeout    time.Duration
+	callback   func(id string)
+	startAt    time.Time
+	retryOn    bool
+	retryMax   int
+	retryTimes int
 }
 
 type taskHeap []*task

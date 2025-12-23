@@ -5,7 +5,9 @@ import "time"
 type enqueueConfig struct {
 	taskID   string
 	timeout  time.Duration
-	callback func(string, error)
+	callback func(string)
+	retryOn  bool
+	retryMax *int
 }
 
 type EnqueueOption func(*enqueueConfig)
@@ -22,8 +24,15 @@ func WithTimeout(d time.Duration) EnqueueOption {
 	}
 }
 
-func WithCallback(fn func(id string, err error)) EnqueueOption {
+func WithCallback(fn func(id string)) EnqueueOption {
 	return func(c *enqueueConfig) {
 		c.callback = fn
+	}
+}
+
+func WithRetry(retryMax *int) EnqueueOption {
+	return func(c *enqueueConfig) {
+		c.retryOn = true
+		c.retryMax = retryMax
 	}
 }
