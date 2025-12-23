@@ -9,7 +9,7 @@
 [![version](https://img.shields.io/github/v/tag/pardnchiu/go-queue?label=release)](https://github.com/pardnchiu/go-queue/releases)
 [![license](https://img.shields.io/github/license/pardnchiu/go-queue)](LICENSE)
 
-- [四大核心特色](#四大核心特色)
+- [核心特色](#核心特色)
     - [並發邊界](#並發邊界)
     - [優先級佇列與提升](#優先級)
     - [錯誤重試](#錯誤重試)
@@ -34,7 +34,7 @@
 - [作者](#作者)
 - [星](#星)
 
-## 四大核心特色
+## 核心特色
 
 ### 並發邊界
 可配置大小的 Worker 池（預設：CPU 核心數 × 2）。超出 Worker 容量的任務會排隊等待，防止系統過載同時最大化硬體利用率。

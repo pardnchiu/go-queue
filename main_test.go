@@ -178,3 +178,323 @@ func TestPriorityOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestEnqueueOptions(t *testing.T) {
+	queue := New(&Config{Workers: 1})
+
+	ctx := context.Background()
+	queue.Start(ctx)
+
+	var callbackCalled atomic.Bool
+	var customID = "custom-task-id"
+
+	taskID, err := queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		time.Sleep(10 * time.Millisecond)
+		return nil
+	},
+		WithTaskID(customID),
+		WithTimeout(5*time.Second),
+		WithCallback(func(id string) {
+			if id == customID {
+				callbackCalled.Store(true)
+			}
+		}),
+	)
+
+	if err != nil {
+		t.Errorf("Enqueue failed: %v", err)
+	}
+
+	if taskID != customID {
+		t.Errorf("expected task ID %s, got %s", customID, taskID)
+	}
+
+	queue.Shutdown(ctx)
+
+	time.Sleep(50 * time.Millisecond)
+
+	if !callbackCalled.Load() {
+		t.Errorf("callback was not called")
+	}
+}
+
+func TestRetry(t *testing.T) {
+	queue := New(&Config{Workers: 1})
+
+	ctx := context.Background()
+	queue.Start(ctx)
+
+	var attemptCount atomic.Int32
+	maxRetry := 2
+
+	_, err := queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		attemptCount.Add(1)
+		return context.DeadlineExceeded
+	}, WithRetry(&maxRetry))
+
+	if err != nil {
+		t.Errorf("Enqueue failed: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	queue.Shutdown(ctx)
+
+	expected := int32(maxRetry + 1)
+	if attemptCount.Load() != expected {
+		t.Errorf("expected %d attempts, got %d", expected, attemptCount.Load())
+	}
+}
+
+func TestRetryWithNilMax(t *testing.T) {
+	queue := New(&Config{Workers: 1})
+
+	ctx := context.Background()
+	queue.Start(ctx)
+
+	var attemptCount atomic.Int32
+
+	_, err := queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		attemptCount.Add(1)
+		return context.DeadlineExceeded
+	}, WithRetry(nil))
+
+	if err != nil {
+		t.Errorf("Enqueue failed: %v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	queue.Shutdown(ctx)
+
+	expected := int32(4)
+	if attemptCount.Load() != expected {
+		t.Errorf("expected %d attempts (default 3+1), got %d", expected, attemptCount.Load())
+	}
+}
+
+func TestTaskTimeout(t *testing.T) {
+	queue := New(&Config{
+		Workers: 1,
+		Timeout: 1,
+	})
+
+	ctx := context.Background()
+	queue.Start(ctx)
+
+	var completed atomic.Bool
+
+	queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
+			completed.Store(true)
+			return nil
+		}
+	})
+
+	time.Sleep(2 * time.Second)
+
+	queue.Shutdown(ctx)
+
+	if completed.Load() {
+		t.Errorf("task should have timed out")
+	}
+}
+
+func TestPanic(t *testing.T) {
+	queue := New(&Config{Workers: 1})
+
+	ctx := context.Background()
+	queue.Start(ctx)
+
+	queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		panic("test panic")
+	})
+
+	time.Sleep(100 * time.Millisecond)
+
+	queue.Shutdown(ctx)
+}
+
+func TestEnqueueWhenClosed(t *testing.T) {
+	queue := New(&Config{Workers: 1})
+
+	ctx := context.Background()
+	queue.Start(ctx)
+	queue.Shutdown(ctx)
+
+	_, err := queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		return nil
+	})
+
+	if err == nil {
+		t.Errorf("expected error when enqueueing to closed queue")
+	}
+}
+
+func TestEnqueueWithCancelledContext(t *testing.T) {
+	queue := New(&Config{Workers: 1})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	queue.Start(context.Background())
+
+	_, err := queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		return nil
+	})
+
+	if err == nil {
+		t.Errorf("expected error when enqueueing with cancelled context")
+	}
+
+	queue.Shutdown(context.Background())
+}
+
+func TestQueueLen(t *testing.T) {
+	queue := New(&Config{
+		Workers: 1,
+		Size:    10,
+	})
+
+	ctx := context.Background()
+
+	for i := 0; i < 5; i++ {
+		queue.Enqueue(ctx, "", func(ctx context.Context) error {
+			time.Sleep(100 * time.Millisecond)
+			return nil
+		})
+	}
+
+	length := queue.pending.Len()
+	if length != 5 {
+		t.Errorf("expected queue length 5, got %d", length)
+	}
+
+	queue.Start(ctx)
+	queue.Shutdown(ctx)
+}
+
+func TestQueueFull(t *testing.T) {
+	queue := New(&Config{
+		Workers: 1,
+		Size:    2,
+	})
+
+	ctx := context.Background()
+
+	queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		time.Sleep(100 * time.Millisecond)
+		return nil
+	})
+
+	queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		time.Sleep(100 * time.Millisecond)
+		return nil
+	})
+
+	_, err := queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		return nil
+	})
+
+	if err == nil {
+		t.Errorf("expected error when queue is full")
+	}
+
+	queue.Start(ctx)
+	queue.Shutdown(ctx)
+}
+
+func TestPriorityPresetTypes(t *testing.T) {
+	queue := New(&Config{
+		Workers: 1,
+		Preset: map[string]PresetConfig{
+			"immediate": {Priority: "immediate"},
+			"unknown":   {Priority: "unknown"},
+		},
+	})
+
+	ctx := context.Background()
+
+	var order []string
+	var mu sync.Mutex
+
+	queue.Enqueue(ctx, "unknown", func(ctx context.Context) error {
+		mu.Lock()
+		order = append(order, "unknown")
+		mu.Unlock()
+		return nil
+	})
+
+	queue.Enqueue(ctx, "immediate", func(ctx context.Context) error {
+		mu.Lock()
+		order = append(order, "immediate")
+		mu.Unlock()
+		return nil
+	})
+
+	queue.Start(ctx)
+	queue.Shutdown(ctx)
+
+	if len(order) != 2 || order[0] != "immediate" {
+		t.Errorf("expected immediate priority to execute first")
+	}
+}
+
+func TestCustomTimeout(t *testing.T) {
+	queue := New(&Config{
+		Workers: 1,
+		Timeout: 30,
+		Preset: map[string]PresetConfig{
+			"custom": {Timeout: 1},
+		},
+	})
+
+	ctx := context.Background()
+	queue.Start(ctx)
+
+	var completed atomic.Bool
+
+	queue.Enqueue(ctx, "custom", func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Second):
+			completed.Store(true)
+			return nil
+		}
+	})
+
+	time.Sleep(2 * time.Second)
+
+	queue.Shutdown(ctx)
+
+	if completed.Load() {
+		t.Errorf("task with custom timeout should have timed out")
+	}
+}
+
+func TestShutdownTimeout(t *testing.T) {
+	queue := New(&Config{Workers: 1})
+
+	ctx := context.Background()
+	queue.Start(ctx)
+
+	queue.Enqueue(ctx, "", func(ctx context.Context) error {
+		time.Sleep(5 * time.Second)
+		return nil
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	err := queue.Shutdown(shutdownCtx)
+
+	if err == nil {
+		t.Errorf("expected timeout error during shutdown")
+	}
+}
