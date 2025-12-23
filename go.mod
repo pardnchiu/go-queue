@@ -1,3 +1,3 @@
 module github.com/pardnchiu/go-queue
 
-go 1.25.1
+go 1.23
