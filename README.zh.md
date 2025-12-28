@@ -1,7 +1,6 @@
-# Go 任務佇列
+![cover](./cover.png)
 
-> 輕量的 Golang 優先級佇列，支援有界併發、優先級提升、錯誤重試和優雅關閉。最大化硬體資源利用並防止系統過載<br>
-> 適用於需要控制併發任務執行並支援優先級排程的場景 
+# Go 任務佇列
 
 [![pkg](https://pkg.go.dev/badge/github.com/pardnchiu/go-queue.svg)](https://pkg.go.dev/github.com/pardnchiu/go-queue)
 [![card](https://goreportcard.com/badge/github.com/pardnchiu/go-queue)](https://goreportcard.com/report/github.com/pardnchiu/go-queue)
@@ -9,23 +8,26 @@
 [![version](https://img.shields.io/github/v/tag/pardnchiu/go-queue?label=release)](https://github.com/pardnchiu/go-queue/releases)
 [![license](https://img.shields.io/github/license/pardnchiu/go-queue)](LICENSE)
 
-- [核心特色](#核心特色)
-    - [並發邊界](#並發邊界)
-    - [優先級佇列與提升](#優先級)
-    - [錯誤重試](#錯誤重試)
+> 輕量的 Golang 優先級佇列，支援有界併發、優先級提升、錯誤重試和優雅關閉。最大化硬體資源利用並防止系統過載<br>
+> 適用於三大需要控制併發任務執行並支援優先級排程的場景 
+
+- [三大核心特色](#三大核心特色)
+  - [並發邊界](#並發邊界)
+  - [優先級佇列與提升](#優先級)
+  - [錯誤重試](#錯誤重試)
 - [流程圖](#流程圖)
 - [使用方法](#使用方法)
-    - [安裝](#安裝)
-    - [初始化](#初始化)
-        - [基本使用](#基本使用)
-        - [使用預設配置](#使用預設配置)
-        - [使用選項](#使用選項)
-        - [使用重試](#使用重試)
+  - [安裝](#安裝)
+  - [初始化](#初始化)
+    - [基本使用](#基本使用)
+    - [使用預設配置](#使用預設配置)
+    - [使用選項](#使用選項)
+    - [使用重試](#使用重試)
 - [配置介紹](#配置介紹)
 - [優先級等級](#優先級等級)
 - [可用函式](#可用函式)
-    - [佇列管理](#佇列管理)
-    - [入列選項](#入列選項)
+  - [佇列管理](#佇列管理)
+  - [入列選項](#入列選項)
 - [優先級提升](#優先級提升-1)
 - [重試機制](#重試機制)
 - [超時機制](#超時機制)
@@ -34,7 +36,7 @@
 - [作者](#作者)
 - [星](#星)
 
-## 核心特色
+## 三大核心特色
 
 ### 並發邊界
 可配置大小的 Worker 池（預設：CPU 核心數 × 2）。超出 Worker 容量的任務會排隊等待，防止系統過載同時最大化硬體利用率。
@@ -260,10 +262,10 @@ func main() {
     Size:    1000,
     Timeout: 60,
     Preset: map[string]queue.PresetConfig{
-      "critical": {Priority: "immediate", Timeout: 15},
-      "email":    {Priority: "high", Timeout: 30},
-      "report":   {Priority: "normal", Timeout: 120},
-      "cleanup":  {Priority: "low", Timeout: 300},
+      "critical": {Priority: PriorityImmediate, Timeout: 15},
+      "email":    {Priority: PriorityHigh, Timeout: 30},
+      "report":   {Priority: PriorityNormal, Timeout: 120},
+      "cleanup":  {Priority: PriorityLow, Timeout: 300},
     },
   })
   
@@ -389,8 +391,8 @@ type Config struct {
 }
 
 type PresetConfig struct {
-  Priority string // "immediate"、"high"、"normal"、"low"（預設："normal"）
-  Timeout  int    // 覆蓋超時秒數（0 = 依優先級自動計算）
+	Priority Priority      // nil = 用 PriorityNormal
+	Timeout  time.Duration // 0 = 依 Priority 自動計算（秒）
 }
 ```
 
@@ -548,9 +550,9 @@ scheduler.Add("@every 1m", func() error {
 <h4 style="padding-top: 0">邱敬幃 Pardn Chiu</h4>
 
 <a href="mailto:dev@pardn.io" target="_blank">
-  <img src="https://pardn.io/image/email.svg" width="48" height="48">
+<img src="https://pardn.io/image/email.svg" width="48" height="48">
 </a> <a href="https://linkedin.com/in/pardnchiu" target="_blank">
-  <img src="https://pardn.io/image/linkedin.svg" width="48" height="48">
+<img src="https://pardn.io/image/linkedin.svg" width="48" height="48">
 </a>
 
 ## 星

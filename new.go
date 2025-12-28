@@ -24,13 +24,13 @@ type Queue struct {
 type Config struct {
 	Workers int                     // default = CPU * 2
 	Size    int                     // default = Workers * 64
-	Timeout int                     // default = 30
+	Timeout int64                   // default = 30
 	Preset  map[string]PresetConfig // default = empty
 }
 
 type PresetConfig struct {
-	Priority string // nil = 用 DefaultPriority
-	Timeout  int    // 0 = 依 Priority 自動計算（秒）
+	Priority Priority      // nil = 用 PriorityNormal
+	Timeout  time.Duration // 0 = 依 Priority 自動計算（秒）
 }
 
 func New(config *Config) *Queue {
@@ -124,13 +124,13 @@ func (q *Queue) execute(task *task) {
 		} else {
 			err = ctx.Err()
 		}
-		leakTimeout := time.NewTimer(5 * time.Second)
-		select {
-		case <-done:
-			leakTimeout.Stop()
-		case <-leakTimeout.C:
-			slog.Warn("task.leaked", "id", task.ID, "preset", task.preset, "timeout", task.timeout)
-		}
+		// leakTimeout := time.NewTimer(5 * time.Second)
+		// select {
+		// case <-done:
+		// 	leakTimeout.Stop()
+		// case <-leakTimeout.C:
+		// 	slog.Warn("task.leaked", "id", task.ID, "preset", task.preset, "timeout", task.timeout)
+		// }
 	}
 
 	elapsed := time.Since(start)
@@ -194,7 +194,7 @@ func (q *Queue) setRetry(task *task, err error, elapsed time.Duration) error {
 	)
 
 	task.retryTimes++
-	task.priority = priorityRetry
+	task.priority = PriorityRetry
 	task.startAt = time.Now()
 
 	q.mu.Lock()
@@ -236,7 +236,7 @@ func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx 
 	task := &task{
 		ID:       config.taskID,
 		preset:   presetName,
-		priority: q.config.getPresetPriority(presetName),
+		priority: q.config.Preset[presetName].Priority,
 		action:   action,
 		timeout:  config.timeout,
 		callback: config.callback,

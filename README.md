@@ -1,15 +1,18 @@
 > [!NOTE]
-> This README was translated by ChatGPT 5-mini
-# Go Task Queue
+> This README was translated by ChatGPT 5-mini, get the original version from [here](./README.zh.md).
 
-> Lightweight Golang priority queue that supports bounded concurrency, priority promotion, error retry, and graceful shutdown. Maximizes hardware utilization and prevents system overload.  
-> Suitable for scenarios that need controlled concurrent task execution with priority scheduling.
+![cover](./cover.png)
+
+# Go Task Queue
 
 [![pkg](https://pkg.go.dev/badge/github.com/pardnchiu/go-queue.svg)](https://pkg.go.dev/github.com/pardnchiu/go-queue)
 [![card](https://goreportcard.com/badge/github.com/pardnchiu/go-queue)](https://goreportcard.com/report/github.com/pardnchiu/go-queue)
 [![codecov](https://img.shields.io/codecov/c/github/pardnchiu/go-queue/master)](https://app.codecov.io/github/pardnchiu/go-queue/tree/master)
 [![version](https://img.shields.io/github/v/tag/pardnchiu/go-queue?label=release)](https://github.com/pardnchiu/go-queue/releases)
 [![license](https://img.shields.io/github/license/pardnchiu/go-queue)](LICENSE)
+
+> Lightweight Golang priority queue that supports bounded concurrency, priority promotion, error retry, and graceful shutdown. Maximizes hardware utilization and prevents system overload.  
+> Suitable for scenarios that need controlled concurrent task execution with priority scheduling.
 
 - [Core Features](#core-features)
   - [Bounded Concurrency](#bounded-concurrency)
@@ -228,19 +231,19 @@ func main() {
   
   // Enqueue tasks
   for i := 0; i < 10; i++ {
-  id, err := q.Enqueue(ctx, "", func(ctx context.Context) error {
-    fmt.Println("task executed")
-    return nil
-  })
-  if err != nil {
-    fmt.Printf("enqueue failed: %v\n", err)
-  }
-  fmt.Printf("task ID: %s\n", id)
+    id, err := q.Enqueue(ctx, "", func(ctx context.Context) error {
+      fmt.Println("task executed")
+      return nil
+    })
+    if err != nil {
+      fmt.Printf("enqueue failed: %v\n", err)
+    }
+    fmt.Printf("task ID: %s\n", id)
   }
   
   // Graceful shutdown (wait for all tasks to finish)
   if err := q.Shutdown(ctx); err != nil {
-  fmt.Printf("shutdown error: %v\n", err)
+    fmt.Printf("shutdown error: %v\n", err)
   }
 }
 ```
@@ -258,15 +261,15 @@ import (
 
 func main() {
   q := queue.New(&queue.Config{
-  Workers: 8,
-  Size:    1000,
-  Timeout: 60,
-  Preset: map[string]queue.PresetConfig{
-    "critical": {Priority: "immediate", Timeout: 15},
-    "email":    {Priority: "high", Timeout: 30},
-    "report":   {Priority: "normal", Timeout: 120},
-    "cleanup":  {Priority: "low", Timeout: 300},
-  },
+    Workers: 8,
+    Size:    1000,
+    Timeout: 60,
+    Preset: map[string]queue.PresetConfig{
+      "critical": {Priority: PriorityImmediate, Timeout: 15},
+      "email":    {Priority: PriorityHigh, Timeout: 30},
+      "report":   {Priority: PriorityNormal, Timeout: 120},
+      "cleanup":  {Priority: PriorityLow, Timeout: 300},
+    },
   })
   
   ctx := context.Background()
@@ -275,17 +278,17 @@ func main() {
   
   // Use preset config for critical payment
   q.Enqueue(ctx, "critical", func(ctx context.Context) error {
-  return processPayment()
+    return processPayment()
   })
   
   // Use preset config to send email
   q.Enqueue(ctx, "email", func(ctx context.Context) error {
-  return sendNotification()
+    return sendNotification()
   })
   
   // Use preset config to generate report
   q.Enqueue(ctx, "report", func(ctx context.Context) error {
-  return generateReport()
+    return generateReport()
   })
 }
 ```
@@ -311,30 +314,30 @@ func main() {
   
   // Custom task ID
   q.Enqueue(ctx, "", func(ctx context.Context) error {
-  return processOrder("ORD-123")
+    return processOrder("ORD-123")
   }, queue.WithTaskID("order-ORD-123"))
   
   // Custom timeout
   q.Enqueue(ctx, "", func(ctx context.Context) error {
-  return heavyComputation()
+    return heavyComputation()
   }, queue.WithTimeout(5*time.Minute))
   
   // Custom callback (only triggered on success)
   q.Enqueue(ctx, "", func(ctx context.Context) error {
-  return sendEmail()
+    return sendEmail()
   }, queue.WithCallback(func(id string) {
-  fmt.Printf("task %s completed\n", id)
+    fmt.Printf("task %s completed\n", id)
   }))
   
   // Combined options
   q.Enqueue(ctx, "", func(ctx context.Context) error {
-  return importData()
+    return importData()
   },
-  queue.WithTaskID("import-daily"),
-  queue.WithTimeout(10*time.Minute),
-  queue.WithCallback(func(id string) {
-    logSuccess(id)
-  }),
+    queue.WithTaskID("import-daily"),
+    queue.WithTimeout(10*time.Minute),
+    queue.WithCallback(func(id string) {
+      logSuccess(id)
+    }),
   )
 }
 ```
@@ -350,8 +353,8 @@ type Config struct {
 }
 
 type PresetConfig struct {
-  Priority string // "immediate", "high", "normal", "low" (default: "normal")
-  Timeout  int    // override timeout in seconds (0 = computed by priority)
+  Priority Priority         // nil = PriorityNormal
+  Timeout  time.Duration    // override timeout in seconds (0 = computed by priority)
 }
 ```
 
@@ -374,9 +377,9 @@ type PresetConfig struct {
 - `New(config)` - create a new queue instance
   ```go
   q := queue.New(&queue.Config{
-  Workers: 4,
-  Size:    256,
-  Timeout: 60,
+    Workers: 4,
+    Size:    256,
+    Timeout: 60,
   })
   ```
 
@@ -388,7 +391,7 @@ type PresetConfig struct {
 - `Enqueue(ctx, preset, action, options...)` - add a task to the queue
   ```go
   id, err := q.Enqueue(ctx, "email", func(ctx context.Context) error {
-  return sendEmail()
+    return sendEmail()
   })
   ```
 
@@ -488,9 +491,9 @@ Works well integrated with [go-scheduler](https://github.com/pardnchiu/go-schedu
 scheduler.Add("@every 1m", func() error {
   orders := db.GetPendingOrders()
   for _, o := range orders {
-  queue.Enqueue(ctx, "order", func(ctx context.Context) error {
-    return processOrder(o)
-  })
+    queue.Enqueue(ctx, "order", func(ctx context.Context) error {
+      return processOrder(o)
+    })
   }
   return nil
 })
@@ -507,9 +510,9 @@ This project is licensed under [MIT](LICENSE).
 <h4 style="padding-top: 0">邱敬幃 Pardn Chiu</h4>
 
 <a href="mailto:dev@pardn.io" target="_blank">
-  <img src="https://pardn.io/image/email.svg" width="48" height="48">
+<img src="https://pardn.io/image/email.svg" width="48" height="48">
 </a> <a href="https://linkedin.com/in/pardnchiu" target="_blank">
-  <img src="https://pardn.io/image/linkedin.svg" width="48" height="48">
+<img src="https://pardn.io/image/linkedin.svg" width="48" height="48">
 </a>
 
 ## Stars

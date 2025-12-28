@@ -1,59 +1,46 @@
 package goQueue
 
 import (
-	"strings"
 	"time"
 )
 
-type priority int
+type Priority int
 
 const (
-	priorityImmediate priority = iota
-	priorityHigh
-	priorityRetry
-	priorityNormal
-	priorityLow
+	PriorityImmediate Priority = iota
+	PriorityHigh
+	PriorityRetry
+	PriorityNormal
+	PriorityLow
 )
 
-func (c *Config) getPresetPriority(name string) priority {
-	if config, ok := c.Preset[name]; ok {
-		switch strings.ToLower(config.Priority) {
-		case "immediate":
-			return priorityImmediate
-		case "high":
-			return priorityHigh
-		case "normal":
-			return priorityNormal
-		case "low":
-			return priorityLow
-		default:
-			return priorityNormal
-		}
-	}
-	return priorityNormal
-}
-
 func (c *Config) getQueueTimeout(name string) time.Duration {
-	timeout := c.Timeout
+	timeout := time.Duration(c.Timeout)
 	if config, ok := c.Preset[name]; ok && config.Timeout > 0 {
-		timeout = config.Timeout
+		timeout = time.Duration(config.Timeout)
 	}
 
-	var sec int
-	switch c.getPresetPriority(name) {
-	case priorityImmediate:
-		sec = timeout / 4
-	case priorityHigh:
-		sec = timeout / 2
-	case priorityRetry:
-		sec = timeout / 2
-	case priorityNormal:
-		sec = timeout
-	case priorityLow:
-		sec = timeout * 2
+	var dur time.Duration
+	switch c.Preset[name].Priority {
+	case PriorityImmediate:
+		dur = time.Duration(timeout / 4)
+	case PriorityHigh:
+		dur = time.Duration(timeout / 2)
+	case PriorityRetry:
+		dur = time.Duration(timeout / 2)
+	case PriorityLow:
+		dur = time.Duration(timeout * 2)
 	default:
-		sec = timeout
+		dur = time.Duration(timeout)
 	}
 
-	return time.Duration(min(max(sec, 15), 120)) * time.Second
+	// 限制 dur 最小 15 秒，最大 120 秒
+	if dur < 15*time.Second {
+		dur = 15 * time.Second
+	}
+	if dur > 120*time.Second {
+		dur = 120 * time.Second
+	}
+
+	return dur
 }

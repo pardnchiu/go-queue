@@ -130,9 +130,9 @@ func TestPriorityOrder(t *testing.T) {
 	queue := New(&Config{
 		Workers: 1, // 單 worker 確保順序
 		Preset: map[string]PresetConfig{
-			"low":    {Priority: "low"},
-			"high":   {Priority: "high"},
-			"normal": {Priority: "normal"},
+			"low":    {Priority: PriorityLow},
+			"high":   {Priority: PriorityHigh},
+			"normal": {Priority: PriorityNormal},
 		},
 	})
 
@@ -230,7 +230,7 @@ func TestRetry(t *testing.T) {
 	_, err := queue.Enqueue(ctx, "", func(ctx context.Context) error {
 		attemptCount.Add(1)
 		return context.DeadlineExceeded
-	}, WithRetry(&maxRetry))
+	}, WithRetry(maxRetry))
 
 	if err != nil {
 		t.Errorf("Enqueue failed: %v", err)
@@ -257,7 +257,7 @@ func TestRetryWithNilMax(t *testing.T) {
 	_, err := queue.Enqueue(ctx, "", func(ctx context.Context) error {
 		attemptCount.Add(1)
 		return context.DeadlineExceeded
-	}, WithRetry(nil))
+	}, WithRetry())
 
 	if err != nil {
 		t.Errorf("Enqueue failed: %v", err)
@@ -411,8 +411,8 @@ func TestPriorityPresetTypes(t *testing.T) {
 	queue := New(&Config{
 		Workers: 1,
 		Preset: map[string]PresetConfig{
-			"immediate": {Priority: "immediate"},
-			"unknown":   {Priority: "unknown"},
+			"immediate": {Priority: PriorityImmediate},
+			"unknown":   {Priority: PriorityNormal}, // 預設為 normal
 		},
 	})
 

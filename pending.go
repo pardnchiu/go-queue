@@ -13,35 +13,35 @@ type pending struct {
 	heap      *taskHeap
 	size      int
 	closed    bool
-	promotion map[priority]promotion
+	promotion map[Priority]promotion
 }
 
 type promotion struct {
 	After time.Duration
-	To    priority
+	To    Priority
 }
 
 type promotionTask struct {
 	taskID string
-	from   priority
-	to     priority
+	from   Priority
+	to     Priority
 }
 
-func (c *Config) getPromotion() map[priority]promotion {
+func (c *Config) getPromotion() map[Priority]promotion {
 	timeout := time.Duration(c.Timeout) * time.Second
-	return map[priority]promotion{
-		priorityLow: {
+	return map[Priority]promotion{
+		PriorityLow: {
 			After: min(max(timeout, 30*time.Second), 120*time.Second),
-			To:    priorityNormal,
+			To:    PriorityNormal,
 		},
-		priorityNormal: {
+		PriorityNormal: {
 			After: min(max(timeout*2, 30*time.Second), 120*time.Second),
-			To:    priorityHigh,
+			To:    PriorityHigh,
 		},
 	}
 }
 
-func newPending(size int, promotion map[priority]promotion) *pending {
+func newPending(size int, promotion map[Priority]promotion) *pending {
 	h := &taskHeap{}
 	heap.Init(h)
 

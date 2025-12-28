@@ -30,9 +30,13 @@ func WithCallback(fn func(id string)) EnqueueOption {
 	}
 }
 
-func WithRetry(retryMax *int) EnqueueOption {
+func WithRetry(retryMax ...int) EnqueueOption {
 	return func(c *enqueueConfig) {
 		c.retryOn = true
-		c.retryMax = retryMax
+		if len(retryMax) > 0 {
+			c.retryMax = &retryMax[0]
+		} else {
+			c.retryMax = nil
+		}
 	}
 }
