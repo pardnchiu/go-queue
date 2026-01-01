@@ -41,8 +41,11 @@ func (c *Config) getPromotion() map[Priority]promotion {
 	}
 }
 
-func newPending(size int, promotion map[Priority]promotion) *pending {
-	h := &taskHeap{}
+func newPending(workers, size int, promotion map[Priority]promotion) *pending {
+	minCap := max(16, min(size/8, size/workers))
+	h := &taskHeap{
+		minCap: minCap,
+	}
 	heap.Init(h)
 
 	newPending := &pending{
@@ -103,8 +106,9 @@ func (p *pending) promoteLocked() []promotionTask {
 	var events []promotionTask
 	now := time.Now()
 
+	tasks := p.heap.tasks
 	for i := p.heap.Len() - 1; i >= 0; i-- {
-		t := (*p.heap)[i]
+		t := tasks[i]
 		rule, ok := p.promotion[t.priority]
 		if !ok || now.Sub(t.startAt) < rule.After || rule.To >= t.priority {
 			continue

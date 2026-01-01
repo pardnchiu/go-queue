@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	taskHeapMinCap = 16
+	taskHeapMinCapRatio = 8
 )
 
 type task struct {
@@ -22,44 +22,46 @@ type task struct {
 	retryTimes int
 }
 
-type taskHeap []*task
+type taskHeaps []*task
 
-func (h taskHeap) Len() int {
-	return len(h)
+type taskHeap struct {
+	tasks  taskHeaps
+	minCap int
 }
 
-func (h taskHeap) Less(i, j int) bool {
-	if h[i].priority != h[j].priority {
-		return h[i].priority < h[j].priority
+func (h *taskHeap) Len() int {
+	return len(h.tasks)
+}
+
+func (h *taskHeap) Less(i, j int) bool {
+	if h.tasks[i].priority != h.tasks[j].priority {
+		return h.tasks[i].priority < h.tasks[j].priority
 	}
-	return h[i].startAt.Before(h[j].startAt)
+	return h.tasks[i].startAt.Before(h.tasks[j].startAt)
 }
 
-func (h taskHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
+func (h *taskHeap) Swap(i, j int) {
+	h.tasks[i], h.tasks[j] = h.tasks[j], h.tasks[i]
 }
 
 func (h *taskHeap) Push(x interface{}) {
-	*h = append(*h, x.(*task))
+	h.tasks = append(h.tasks, x.(*task))
 }
 
 func (h *taskHeap) Pop() interface{} {
-	old := *h
+	old := h.tasks
 	n := len(old)
 	task := old[n-1]
 	old[n-1] = nil
-	*h = old[0 : n-1]
+	h.tasks = old[0 : n-1]
 
-	length := len(*h)
-	capacity := cap(*h)
-	if capacity > taskHeapMinCap && length < capacity/4 {
-		newCap := capacity / 2
-		if newCap < taskHeapMinCap {
-			newCap = taskHeapMinCap
-		}
-		shrunk := make(taskHeap, length, newCap)
-		copy(shrunk, *h)
-		*h = shrunk
+	length := len(h.tasks)
+	capacity := cap(h.tasks)
+	if capacity > h.minCap*4 && length < capacity/taskHeapMinCapRatio {
+		newCap := max(capacity/4, h.minCap)
+		shrunk := make(taskHeaps, length, newCap)
+		copy(shrunk, h.tasks)
+		h.tasks = shrunk
 	}
 
 	return task

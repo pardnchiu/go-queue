@@ -1,40 +1,37 @@
 # Update Log
 
-> Generated: 2025-12-31
+> Generated: 2026-01-01 20:00
 
 ## Summary
 
-將優先級從字串型別重構為整數常數型別，優化 Retry 選項介面，新增 taskHeap 記憶體管理機制，並移除任務洩漏檢測邏輯。
+優化 taskHeap 記憶體管理，新增動態最小容量機制，完善 timeout 日誌，移除未使用的 leak detection。
 
 ## Changes
 
 ### REFACTOR
-- **[priority.go]**: 將 priority 從字串型別改為整數常數（`PriorityImmediate`, `PriorityHigh`, `PriorityRetry`, `PriorityNormal`, `PriorityLow`），移除字串解析邏輯
-- **[new.go]**: 將 `PresetConfig.Priority` 從 `string` 改為 `priority` 型別，`PresetConfig.Timeout` 從 `int` 改為 `time.Duration`
-- **[option.go]**: 將 `WithRetry` 參數從 `*int` 改為變長參數 `...int`，支援無參數調用
-
-### UPDATE
-- **[priority.go]**: 改進 timeout 計算邏輯，直接使用 `time.Duration` 運算，並在函式內部進行邊界限制（15-120 秒）
-- **[pending.go]**: 更新優先級升級邏輯，使用新的優先級常數替代字串
+- **task.go**: 將 `taskHeap` 從 slice 型別重構為 struct，新增 `tasks` 與 `minCap` 欄位，支援動態最小容量
+- **task.go**: 調整 `taskHeap` 的 `Len`、`Less`、`Swap`、`Push`、`Pop` 方法，適配新的 struct 結構
+- **pending.go**: 修正 `newPending` 初始化，根據 `workers` 與 `size` 計算動態最小容量（`max(16, min(size/8, size/workers))`）
 
 ### PERF
-- **[task.go]**: 新增 taskHeap cap 縮減機制，當使用量低於容量 1/4 時自動縮減至一半（最小保留 16）
+- **task.go**: 優化 heap shrink 邏輯，將觸發條件由 `capacity > taskHeapMinCap && length < capacity/4` 改為 `capacity > minCap*4 && length < capacity/taskHeapMinCapRatio`
+- **task.go**: 改進縮減容量計算，使用 `max(capacity/4, minCap)` 確保不低於最小容量
+- **pending.go**: 優化 `promoteLocked` 存取效率，先取得 `tasks` 欄位避免重複存取
+
+### UPDATE
+- **new.go**: 修正 `newPending` 呼叫，新增 `workers` 參數
+- **task.go**: 將 `taskHeapMinCap` 常數重新命名為 `taskHeapMinCapRatio`，數值保持為 8
+
+### FIX
+- **new.go**: 新增 timeout 觸發時的 debug 日誌（`task.timeout_triggered`），記錄 id、preset、timeout 資訊
 
 ### REMOVE
-- **[new.go]**: 移除任務洩漏檢測邏輯（leakTimeout）
-- **[priority.go]**: 移除 `getPresetPriority` 函式
-- **[task.go]**: 在 `Pop()` 中設置 `old[n-1] = nil` 避免記憶體洩漏
-
-### TEST
-- **[main_test.go]**: 更新測試用例以使用新的優先級常數，修改 `WithRetry` 調用方式
+- **new.go**: 移除註解的 leak detection 程式碼（leakTimeout timer 與相關 select 邏輯）
 
 ## Files Changed
 
 | File | Status | Tag |
 |------|--------|-----|
-| `priority.go` | Modified | REFACTOR |
-| `new.go` | Modified | REFACTOR, UPDATE, REMOVE |
-| `option.go` | Modified | REFACTOR |
-| `pending.go` | Modified | UPDATE |
-| `task.go` | Modified | PERF |
-| `main_test.go` | Modified | TEST |
+| `task.go` | Modified | REFACTOR, PERF, UPDATE |
+| `new.go` | Modified | UPDATE, FIX, REMOVE |
+| `pending.go` | Modified | REFACTOR, PERF |

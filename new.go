@@ -62,7 +62,7 @@ func New(config *Config) *Queue {
 
 	return &Queue{
 		config:  newConfig,
-		pending: newPending(newConfig.Size, newConfig.getPromotion()),
+		pending: newPending(newConfig.Workers, newConfig.Size, newConfig.getPromotion()),
 	}
 }
 
@@ -121,16 +121,14 @@ func (q *Queue) execute(task *task) {
 	case <-ctx.Done():
 		if ctx.Err() == context.DeadlineExceeded {
 			err = fmt.Errorf("task timeout after %s", task.timeout)
+
+			slog.Debug("task.timeout_triggered",
+				"id", task.ID,
+				"preset", task.preset,
+				"timeout", task.timeout)
 		} else {
 			err = ctx.Err()
 		}
-		// leakTimeout := time.NewTimer(5 * time.Second)
-		// select {
-		// case <-done:
-		// 	leakTimeout.Stop()
-		// case <-leakTimeout.C:
-		// 	slog.Warn("task.leaked", "id", task.ID, "preset", task.preset, "timeout", task.timeout)
-		// }
 	}
 
 	elapsed := time.Since(start)
