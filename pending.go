@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -12,7 +13,7 @@ type pending struct {
 	cond      *sync.Cond
 	heap      *taskHeap
 	size      int
-	closed    bool
+	state     *atomic.Uint32
 	promotion map[Priority]promotion
 }
 
@@ -28,7 +29,7 @@ type promotionTask struct {
 }
 
 func (c *Config) getPromotion() map[Priority]promotion {
-	timeout := time.Duration(c.Timeout) * time.Second
+	timeout := c.Timeout
 	return map[Priority]promotion{
 		PriorityLow: {
 			After: min(max(timeout, 30*time.Second), 120*time.Second),
@@ -41,7 +42,7 @@ func (c *Config) getPromotion() map[Priority]promotion {
 	}
 }
 
-func newPending(workers, size int, promotion map[Priority]promotion) *pending {
+func newPending(workers, size int, promotion map[Priority]promotion, queueState *atomic.Uint32) *pending {
 	minCap := max(16, min(size/8, size/workers))
 	h := &taskHeap{
 		minCap: minCap,
@@ -52,6 +53,7 @@ func newPending(workers, size int, promotion map[Priority]promotion) *pending {
 		heap:      h,
 		size:      size,
 		promotion: promotion,
+		state:     queueState,
 	}
 	newPending.cond = sync.NewCond(&newPending.mu)
 	return newPending
@@ -61,9 +63,11 @@ func (p *pending) Push(t *task) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if p.closed {
-		return fmt.Errorf("staging queue is disabled")
+	current := queueState(p.state.Load())
+	if current == stateClosed {
+		return fmt.Errorf("staging queue is closed")
 	}
+
 	if p.heap.Len() >= p.size {
 		return fmt.Errorf("staging queue is full")
 	}
@@ -78,7 +82,8 @@ func (p *pending) Pop() (*task, []promotionTask, bool) {
 	defer p.mu.Unlock()
 
 	for {
-		if p.closed && p.heap.Len() == 0 {
+		state := queueState(p.state.Load())
+		if state == stateClosed && p.heap.Len() == 0 {
 			return nil, nil, false
 		}
 
@@ -88,7 +93,8 @@ func (p *pending) Pop() (*task, []promotionTask, bool) {
 			task := heap.Pop(p.heap).(*task)
 			return task, events, true
 		}
-		if p.closed {
+
+		if state == stateClosed {
 			return nil, nil, false
 		}
 
@@ -124,9 +130,12 @@ func (p *pending) promoteLocked() []promotionTask {
 	return events
 }
 
+func (p *pending) State() queueState {
+	return queueState(p.state.Load())
+}
+
 func (p *pending) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.closed = true
 	p.cond.Broadcast()
 }

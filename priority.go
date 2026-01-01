@@ -15,23 +15,23 @@ const (
 )
 
 func (c *Config) getQueueTimeout(name string) time.Duration {
-	timeout := time.Duration(c.Timeout)
+	timeout := c.Timeout
 	if config, ok := c.Preset[name]; ok && config.Timeout > 0 {
-		timeout = time.Duration(config.Timeout)
+		timeout = config.Timeout
 	}
 
 	var dur time.Duration
 	switch c.Preset[name].Priority {
 	case PriorityImmediate:
-		dur = time.Duration(timeout / 4)
+		dur = timeout / 4
 	case PriorityHigh:
-		dur = time.Duration(timeout / 2)
+		dur = timeout / 2
 	case PriorityRetry:
-		dur = time.Duration(timeout / 2)
+		dur = timeout / 2
 	case PriorityLow:
-		dur = time.Duration(timeout * 2)
+		dur = timeout * 2
 	default:
-		dur = time.Duration(timeout)
+		dur = timeout
 	}
 
 	// 限制 dur 最小 15 秒，最大 120 秒

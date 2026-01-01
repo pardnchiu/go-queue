@@ -8,7 +8,16 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
+)
+
+type queueState uint32
+
+const (
+	stateCreated queueState = iota
+	stateRunning
+	stateClosed
 )
 
 type Queue struct {
@@ -17,14 +26,13 @@ type Queue struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
-	mu      sync.RWMutex
-	closed  bool
+	state   atomic.Uint32
 }
 
 type Config struct {
 	Workers int                     // default = CPU * 2
 	Size    int                     // default = Workers * 64
-	Timeout int64                   // default = 30
+	Timeout time.Duration           // default = 30 * seconds
 	Preset  map[string]PresetConfig // default = empty
 }
 
@@ -38,7 +46,7 @@ func New(config *Config) *Queue {
 	newConfig := &Config{
 		Workers: worker,
 		Size:    worker * 64,
-		Timeout: 30,
+		Timeout: 30 * time.Second,
 		Preset:  make(map[string]PresetConfig),
 	}
 
@@ -60,19 +68,33 @@ func New(config *Config) *Queue {
 		}
 	}
 
-	return &Queue{
-		config:  newConfig,
-		pending: newPending(newConfig.Workers, newConfig.Size, newConfig.getPromotion()),
+	q := &Queue{
+		config: newConfig,
 	}
+	q.state.Store(uint32(stateCreated))
+	q.pending = newPending(newConfig.Workers, newConfig.Size, newConfig.getPromotion(), &q.state)
+	return q
 }
 
-func (q *Queue) Start(ctx context.Context) {
+func (q *Queue) Start(ctx context.Context) error {
+	if !q.state.CompareAndSwap(uint32(stateCreated), uint32(stateRunning)) {
+		current := queueState(q.state.Load())
+		switch current {
+		case stateRunning:
+			return fmt.Errorf("queue already started")
+		case stateClosed:
+			return fmt.Errorf("queue already closed")
+		}
+	}
+
 	q.ctx, q.cancel = context.WithCancel(ctx)
 
 	for i := 0; i < q.config.Workers; i++ {
 		q.wg.Add(1)
 		go q.worker()
 	}
+
+	return nil
 }
 
 func (q *Queue) worker() {
@@ -195,13 +217,6 @@ func (q *Queue) setRetry(task *task, err error, elapsed time.Duration) error {
 	task.priority = PriorityRetry
 	task.startAt = time.Now()
 
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.closed {
-		return fmt.Errorf("queue closed, cannot retry")
-	}
-
 	return q.pending.Push(task)
 }
 
@@ -243,25 +258,24 @@ func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx 
 		retryMax: retryMax,
 	}
 
-	q.mu.Lock()
-	if q.closed {
-		q.mu.Unlock()
-		return "", fmt.Errorf("enqueue failed: scheduler is closed")
-	}
 	err := q.pending.Push(task)
-	q.mu.Unlock()
-
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("enqueue failed: %w", err)
 	}
 
 	return task.ID, nil
 }
 
 func (q *Queue) Shutdown(ctx context.Context) error {
-	q.mu.Lock()
-	q.closed = true
-	q.mu.Unlock()
+	for {
+		current := queueState(q.state.Load())
+		if current == stateClosed {
+			return nil
+		}
+		if q.state.CompareAndSwap(uint32(current), uint32(stateClosed)) {
+			break
+		}
+	}
 
 	q.pending.Close()
 
@@ -273,6 +287,9 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-done:
+		if q.cancel != nil {
+			q.cancel()
+		}
 	case <-ctx.Done():
 		if q.cancel != nil {
 			q.cancel()
