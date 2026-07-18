@@ -1,4 +1,4 @@
-package goQueue
+package core
 
 import (
 	"time"
