@@ -4,7 +4,8 @@
 
 ## 前置需求
 
-- Go 1.23 或更高版本
+- Go 1.23 或以上
+- 無外部服務相依（僅使用標準函式庫）
 
 ## 安裝
 
@@ -14,17 +15,23 @@
 go get github.com/pardnchiu/go-queue
 ```
 
+```go
+import "github.com/pardnchiu/go-queue/core"
+```
+
+> `core` 子套件路徑自 v1.1.3 之後的版本起生效；在新版標籤發布前，請改用 `go get github.com/pardnchiu/go-queue@develop`。
+
 ### 從原始碼
 
 ```bash
 git clone https://github.com/pardnchiu/go-queue.git
 cd go-queue
-go test ./...
+go test -race ./...
 ```
 
 ## 使用方式
 
-### 基礎用法
+### 基礎
 
 ```go
 package main
@@ -35,184 +42,218 @@ import (
 	"log"
 	"time"
 
-	goQueue "github.com/pardnchiu/go-queue/core"
+	"github.com/pardnchiu/go-queue/core"
 )
 
 func main() {
-	q := goQueue.New(&goQueue.Config{
-		Workers: 4,
-	})
+	q := core.New(&core.Config{Workers: 4})
 
 	ctx := context.Background()
 	if err := q.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer func() {
-		if err := q.Shutdown(context.Background()); err != nil {
-			log.Printf("shutdown: %v", err)
-		}
-	}()
 
-	id, err := q.Enqueue(ctx, "", func(ctx context.Context) error {
-		fmt.Println("task running")
-		return nil
+	for i := range 3 {
+		id, err := q.Enqueue(ctx, "", func(ctx context.Context) error {
+			fmt.Println("task", i, "running")
+			return nil
+		})
+		if err != nil {
+			log.Printf("enqueue: %v", err)
+			continue
+		}
+		fmt.Println("enqueued", id)
+	}
+
+	// 等待佇列排空，最多 10 秒
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := q.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
+}
+```
+
+### 進階：Preset、重試與 Callback
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"log"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/pardnchiu/go-queue/core"
+)
+
+func main() {
+	// 開啟 Debug 等級以觀察 task.promoted / task.timeout_triggered 事件
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	q := core.New(&core.Config{
+		Workers: 8,
+		Size:    1024,
+		Timeout: 30 * time.Second,
+		Preset: map[string]core.PresetConfig{
+			"payment": {Priority: core.PriorityHigh},
+			"email":   {Priority: core.PriorityNormal},
+			"report":  {Priority: core.PriorityLow, Timeout: 60 * time.Second},
+		},
 	})
-	if err != nil {
+
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	if err := q.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("enqueued:", id)
-	time.Sleep(100 * time.Millisecond)
-}
-```
 
-### 優先級預設
-
-```go
-q := goQueue.New(&goQueue.Config{
-	Workers: 2,
-	Timeout: 30 * time.Second,
-	Preset: map[string]goQueue.PresetConfig{
-		"urgent": {Priority: goQueue.PriorityImmediate},
-		"batch":  {Priority: goQueue.PriorityLow, Timeout: 60 * time.Second},
+	// 失敗時最多重試 5 次，成功後觸發 Callback
+	_, err := q.Enqueue(ctx, "payment", func(ctx context.Context) error {
+		return charge(ctx)
 	},
-})
+		core.WithTaskID("order-1001"),
+		core.WithRetry(5),
+		core.WithCallback(func(id string) {
+			slog.Info("charged", "id", id)
+		}),
+	)
+	if err != nil {
+		log.Printf("enqueue payment: %v", err)
+	}
 
-q.Start(ctx)
+	// WithTimeout 直接覆寫 Preset 推算出的逾時（不受 15–120 秒限制）
+	_, err = q.Enqueue(ctx, "report", func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+			return nil
+		}
+	}, core.WithTimeout(5*time.Minute))
+	if err != nil {
+		log.Printf("enqueue report: %v", err)
+	}
 
-// high priority first
-q.Enqueue(ctx, "urgent", func(ctx context.Context) error {
-	// ...
-	return nil
-})
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := q.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
+}
 
-q.Enqueue(ctx, "batch", func(ctx context.Context) error {
-	// ...
-	return nil
-})
-```
+var errDeclined = errors.New("card declined")
 
-### 入隊選項
-
-```go
-id, err := q.Enqueue(ctx, "urgent", func(ctx context.Context) error {
-	// 業務邏輯
-	return nil
-},
-	goQueue.WithTaskID("order-123"),
-	goQueue.WithTimeout(10*time.Second),
-	goQueue.WithRetry(2),
-	goQueue.WithCallback(func(id string) {
-		fmt.Println("done:", id)
-	}),
-)
-if err != nil {
-	log.Fatal(err)
+func charge(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errDeclined
 }
 ```
 
-### 優雅關閉
+### 行為須知
 
-```go
-shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
-
-if err := q.Shutdown(shutdownCtx); err != nil {
-	// 逾時：仍有任務未完成
-	log.Printf("shutdown: %v", err)
-}
-```
+| 情境 | 行為 |
+|------|------|
+| `Start` 前呼叫 `Enqueue` | 允許；任務暫存於堆中，`Start` 後依優先權執行 |
+| 任務未監聽 `ctx.Done()` | 逾時後 Worker 回報錯誤並繼續處理下一個任務，但該任務的 goroutine 會持續執行直到自行返回 |
+| `Shutdown` 期間任務失敗並觸發重試 | 狀態已為 Closed，重新入列失敗，記錄 `task.retry_failed` 並放棄該任務 |
+| 取消傳給 `Start` 的 ctx | 所有任務的 ctx 隨之取消；Worker 不會停止，後續任務會立即以 `context canceled` 失敗 |
+| `Shutdown` 超過期限 | 取消所有任務 ctx 並回傳錯誤；剩餘任務以已取消的 ctx 執行 |
+| Callback | 僅在任務成功時於獨立 goroutine 呼叫；失敗、逾時、耗盡重試皆不觸發 |
 
 ## API 參考
 
-### New
+### 建構與生命週期
+
+| 函式 | 簽章 | 說明 |
+|------|------|------|
+| `New` | `func New(config *Config) *Queue` | 建立佇列；`config` 可為 `nil`，零值欄位套用預設值 |
+| `Start` | `func (q *Queue) Start(ctx context.Context) error` | 啟動 `Workers` 個 Worker；`ctx` 為所有任務 ctx 的父 ctx |
+| `Enqueue` | `func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx context.Context) error, options ...EnqueueOption) (string, error)` | 將任務推入佇列，回傳任務 ID；`ctx` 僅用於入列前檢查，不傳入任務 |
+| `Shutdown` | `func (q *Queue) Shutdown(ctx context.Context) error` | 拒絕新任務、等待 Worker 排空佇列；`ctx` 到期則提前返回錯誤。重複呼叫回傳 `nil` |
+
+### Config
 
 ```go
-func New(config *Config) *Queue
-```
+type Config struct {
+	Workers int
+	Size    int
+	Timeout time.Duration
+	Preset  map[string]PresetConfig
+}
 
-建立佇列。`config` 可為 `nil`，此時使用預設值。
-
-| 欄位 | 型別 | 預設 | 說明 |
-|------|------|------|------|
-| `Workers` | `int` | `runtime.NumCPU() * 2` | Worker 數量 |
-| `Size` | `int` | `Workers * 64` | 待處理佇列容量 |
-| `Timeout` | `time.Duration` | `30 * time.Second` | 基準逾時 |
-| `Preset` | `map[string]PresetConfig` | empty | 具名優先級／逾時設定 |
-
-### PresetConfig
-
-```go
 type PresetConfig struct {
 	Priority Priority
 	Timeout  time.Duration
 }
 ```
 
-| 欄位 | 說明 |
-|------|------|
-| `Priority` | 優先級；零值為 `PriorityImmediate`（iota 0） |
-| `Timeout` | `0` 時依 Priority 由基準 `Timeout` 推算 |
+| 欄位 | 預設值 | 說明 |
+|------|--------|------|
+| `Workers` | `runtime.NumCPU() * 2` | 併發 Worker 數 |
+| `Size` | `Workers * 64` | 堆容量上限（含重試任務），超過時 `Enqueue` 回傳錯誤 |
+| `Timeout` | `30 * time.Second` | 全域基準逾時；也決定自動升級門檻 |
+| `Preset` | 空 map | Preset 名稱 → `PresetConfig` |
+| `PresetConfig.Priority` | `PriorityImmediate`（零值） | 未設定或 Preset 名稱不存在時為 `PriorityImmediate`，包含 `""` |
+| `PresetConfig.Timeout` | `0` | `> 0` 時取代 `Config.Timeout` 作為該 Preset 的基準逾時 |
 
 ### Priority
 
-| 常數 | 值 | 說明 |
-|------|----|------|
-| `PriorityImmediate` | 0 | 最高，立刻執行 |
-| `PriorityHigh` | 1 | 高優先 |
-| `PriorityRetry` | 2 | 重試任務 |
-| `PriorityNormal` | 3 | 一般 |
-| `PriorityLow` | 4 | 最低；逾時後可晉升 |
+數值越小越優先；同優先權依入列（或重新入列）時間排序。
 
-### Start
+| 常數 | 值 | 逾時倍率 |
+|------|----|---------|
+| `PriorityImmediate` | `0` | 基準 ÷ 4 |
+| `PriorityHigh` | `1` | 基準 ÷ 2 |
+| `PriorityRetry` | `2` | 基準 ÷ 2 |
+| `PriorityNormal` | `3` | 基準 × 1 |
+| `PriorityLow` | `4` | 基準 × 2 |
 
-```go
-func (q *Queue) Start(ctx context.Context) error
-```
+**逾時計算：** `clamp(基準 × 倍率, 15s, 120s)`，基準為 `PresetConfig.Timeout`（若 `> 0`）否則 `Config.Timeout`。倍率依 Preset 設定的優先權決定，入列後的升級不會改變逾時。`WithTimeout` 直接覆寫結果，不套用 clamp。
 
-啟動 worker 池。僅能從 `Created` 轉為 `Running`；重複呼叫或關閉後呼叫會回傳錯誤。
+**自動升級：** 每次 Worker 取任務時檢查整個堆。
 
-### Enqueue
-
-```go
-func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx context.Context) error, options ...EnqueueOption) (string, error)
-```
-
-將任務入隊並回傳 task ID。佇列已關閉、已滿，或 `ctx` 已取消時回傳錯誤。
+| 由 | 至 | 等待門檻 |
+|----|----|---------|
+| `PriorityLow` | `PriorityNormal` | `clamp(Config.Timeout, 30s, 120s)` |
+| `PriorityNormal` | `PriorityHigh` | `clamp(Config.Timeout × 2, 30s, 120s)` |
 
 ### EnqueueOption
 
 | 選項 | 簽章 | 說明 |
 |------|------|------|
-| `WithTaskID` | `func WithTaskID(id string) EnqueueOption` | 自訂 task ID；省略則自動產生 UUID |
-| `WithTimeout` | `func WithTimeout(d time.Duration) EnqueueOption` | 覆寫本次任務逾時 |
-| `WithCallback` | `func WithCallback(fn func(id string)) EnqueueOption` | 成功完成後非同步回呼 |
-| `WithRetry` | `func WithRetry(retryMax ...int) EnqueueOption` | 啟用重試；省略參數時預設最多 3 次 |
+| `WithTaskID` | `func WithTaskID(id string) EnqueueOption` | 自訂任務 ID；未指定時產生 UUID v4 |
+| `WithTimeout` | `func WithTimeout(d time.Duration) EnqueueOption` | 覆寫該任務的逾時 |
+| `WithCallback` | `func WithCallback(fn func(id string)) EnqueueOption` | 任務成功後以任務 ID 呼叫 |
+| `WithRetry` | `func WithRetry(retryMax ...int) EnqueueOption` | 啟用重試；未帶參數時最多重試 3 次。總執行次數 = `retryMax + 1` |
 
-### Shutdown
+重試立即以 `PriorityRetry` 重新入列，不含退避（Backoff）延遲。
 
-```go
-func (q *Queue) Shutdown(ctx context.Context) error
-```
+### 錯誤
 
-關閉佇列、排空待處理任務並等待 worker 結束。`ctx` 逾時時回傳剩餘任務數錯誤。可重複呼叫（冪等）。
+| 來源 | 錯誤訊息 |
+|------|---------|
+| `Start` | `queue already started`、`queue already closed` |
+| `Enqueue` | `ctx.Err()`、`enqueue failed: staging queue is full`、`enqueue failed: staging queue is closed` |
+| `Shutdown` | `shutdown timeout: N tasks remaining` |
+| 任務執行 | `task timeout after <d>`、`panic: <value>` |
 
-### 逾時推算規則
+### slog 事件
 
-基準為 `Config.Timeout`（或 preset 覆寫），再依優先級調整，並限制在 15s–120s：
-
-| Priority | 計算 |
-|----------|------|
-| Immediate | `timeout / 4` |
-| High / Retry | `timeout / 2` |
-| Normal | `timeout` |
-| Low | `timeout * 2` |
-
-### 優先級晉升
-
-| 來源 | 等待時間 | 目標 |
-|------|----------|------|
-| Low | `clamp(Timeout, 30s, 120s)` | Normal |
-| Normal | `clamp(Timeout*2, 30s, 120s)` | High |
+| 事件 | 等級 | 觸發時機 |
+|------|------|---------|
+| `task.completed` | Info | 任務成功 |
+| `task.retrying` | Warn | 任務失敗且仍有重試次數 |
+| `task.failed` | Error | 未啟用重試的任務失敗 |
+| `task.exhausted` | Error | 重試次數耗盡 |
+| `task.retry_failed` | Error | 重新入列失敗（佇列已滿或已關閉） |
+| `task.promoted` | Debug | 任務自動升級 |
+| `task.timeout_triggered` | Debug | 任務逾時 |
 
 ***
 

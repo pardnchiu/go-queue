@@ -4,19 +4,19 @@
 ***
 
 <p align="center">
-<strong>PRIORITY-AWARE TASK QUEUE FOR GO</strong>
+<strong>PRIORITY TASKS THAT NEVER STARVE!</strong>
 </p>
 
 <p align="center">
 <a href="https://pkg.go.dev/github.com/pardnchiu/go-queue"><img src="https://img.shields.io/badge/GO-REFERENCE-blue?include_prereleases&style=for-the-badge" alt="Go Reference"></a>
 <a href="https://github.com/pardnchiu/go-queue/releases"><img src="https://img.shields.io/github/v/tag/pardnchiu/go-queue?include_prereleases&style=for-the-badge" alt="Release"></a>
-<a href="LICENSE"><img src="https://img.shields.io/github/license/pardnchiu/go-queue?include_prereleases&style=for-the-badge" alt="License"></a>
+<a href="../LICENSE"><img src="https://img.shields.io/github/license/pardnchiu/go-queue?include_prereleases&style=for-the-badge" alt="License"></a>
 <a href="https://app.codecov.io/github/pardnchiu/go-queue/tree/develop"><img src="https://img.shields.io/codecov/c/github/pardnchiu/go-queue/develop?include_prereleases&style=for-the-badge" alt="Coverage"></a>
 </p>
 
 ***
 
-> Go 任務佇列函式庫，具備優先級排程、逾時重試與原子狀態機
+> Go 優先權任務佇列，具備防飢餓自動升級、依優先權縮放的逾時與優雅排空關閉
 
 ## 目錄
 
@@ -29,11 +29,11 @@
 
 > `go get github.com/pardnchiu/go-queue` · [完整文件](./doc.zh.md)
 
-- **五級優先佇列** — Immediate／High／Retry／Normal／Low 排序，低優先級逾時後自動晉升。
-- **Worker 池並行** — 預設 CPU×2 個 worker，可調佇列容量與全域逾時。
-- **逾時與重試** — 任務逾時、panic 隔離、可設定重試次數並以最高優先級重新入隊。
-- **Functional Options** — WithTaskID、WithTimeout、WithCallback、WithRetry 彈性設定單次入隊。
-- **原子狀態機** — Created／Running／Closed 以 CAS 轉換，冪等 Shutdown 且無 mutex 競爭。
+- **五級優先權最小堆** — Immediate／High／Retry／Normal／Low 五個層級共用一個最小堆，同級依入列時間先進先出。
+- **防飢餓自動升級** — Low 與 Normal 任務等待超過門檻後自動升級，高優先權流量再密集也不會讓低優先權任務永遠排不到。
+- **Preset 驅動的逾時** — 以具名 Preset 綁定優先權與基準逾時，實際逾時依優先權縮放並限制在 15–120 秒之間。
+- **重試與 panic 隔離** — 失敗任務以專屬 Retry 優先權重新入列，任務內的 panic 被轉為錯誤，不會拖垮 Worker 池（Pool）。
+- **原子狀態生命週期** — Created → Running → Closed 由 CAS 驅動，`Shutdown` 會排空剩餘任務並支援期限控制。
 
 ## 架構
 
@@ -41,14 +41,14 @@
 
 ```mermaid
 graph TB
-    App[應用程式] --> Enqueue[Enqueue]
-    Enqueue --> Pending[待處理 Heap]
-    Pending --> Workers[Worker 池]
-    Workers --> Execute[執行 / 逾時 / 重試]
-    App --> Start[Start]
-    App --> Shutdown[Shutdown]
-    Start --> Workers
-    Shutdown --> Pending
+    C[呼叫端] -->|Enqueue| P[Pending 佇列]
+    P --> H[優先權最小堆]
+    H -->|Pop + 升級| W[Worker 池]
+    W --> E[執行 + 逾時 + panic 恢復]
+    E -->|失敗且可重試| P
+    E -->|成功| CB[Callback]
+    E --> L[slog 事件]
+    S[原子狀態] -.-> P
 ```
 
 ## 授權
@@ -57,12 +57,11 @@ graph TB
 
 ## Author
 
-<img src="https://github.com/pardnchiu.png" align="left" width="96" height="96" style="margin-right: 0.5rem;">
+Just [open an issue](https://github.com/pardnchiu/go-queue/issues/new) to share an idea.
 
-<h4 style="padding-top: 0">邱敬幃 Pardn Chiu</h4>
-
-<a href="mailto:hi@pardn.io">hi@pardn.io</a><br>
-<a href="https://www.linkedin.com/in/pardnchiu">https://www.linkedin.com/in/pardnchiu</a>
+<a href="https://github.com/pardnchiu/go-queue/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=pardnchiu/go-queue&cache_bust=2026-09-21" alt="go-queue contributors" />
+</a>
 
 ***
 
