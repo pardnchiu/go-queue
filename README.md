@@ -4,7 +4,7 @@
 ***
 
 <p align="center">
-<strong>PRIORITY-AWARE TASK QUEUE FOR GO</strong>
+<strong>PRIORITY TASKS THAT NEVER STARVE!</strong>
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
 
 ***
 
-> A Go task queue library with priority scheduling, timeout retries, and an atomic state machine
+> A Go priority task queue with anti-starvation promotion, priority-scaled timeouts, and graceful drain shutdown
 
 ## Table of Contents
 
@@ -29,11 +29,11 @@
 
 > `go get github.com/pardnchiu/go-queue` · [Documentation](./doc/doc.md)
 
-- **Five-Level Priority Queue** — Orders Immediate, High, Retry, Normal, and Low tasks, with automatic promotion after wait timeouts.
-- **Worker Pool Parallelism** — Defaults to CPU×2 workers with configurable queue capacity and global timeout.
-- **Timeout and Retry** — Isolates panics, enforces per-task timeouts, and re-enqueues failed tasks at the highest priority.
-- **Functional Options** — Configures each enqueue with WithTaskID, WithTimeout, WithCallback, and WithRetry.
-- **Atomic State Machine** — Transitions Created, Running, and Closed via CAS for lock-free, idempotent Shutdown.
+- **Five-Level Priority Heap** — Immediate, High, Retry, Normal, and Low share one min-heap, with FIFO ordering inside each level.
+- **Anti-Starvation Promotion** — Low and Normal tasks promote automatically after a wait threshold, so bursts of high-priority work never starve them.
+- **Preset-Driven Timeouts** — Named presets bind a priority and a base timeout, and the effective timeout scales by priority within a 15–120 second window.
+- **Retry and Panic Isolation** — Failed tasks re-enter at a dedicated Retry priority, and panics become errors instead of killing the worker pool.
+- **Atomic Lifecycle** — CAS drives the Created → Running → Closed transitions, and `Shutdown` drains remaining tasks under a caller-supplied deadline.
 
 ## Architecture
 
@@ -41,14 +41,14 @@
 
 ```mermaid
 graph TB
-    App[Application] --> Enqueue[Enqueue]
-    Enqueue --> Pending[Pending Heap]
-    Pending --> Workers[Worker Pool]
-    Workers --> Execute[Execute / Timeout / Retry]
-    App --> Start[Start]
-    App --> Shutdown[Shutdown]
-    Start --> Workers
-    Shutdown --> Pending
+    C[Caller] -->|Enqueue| P[Pending Queue]
+    P --> H[Priority Min-Heap]
+    H -->|Pop + Promote| W[Worker Pool]
+    W --> E[Execute + Timeout + Panic Recovery]
+    E -->|Failed and retryable| P
+    E -->|Success| CB[Callback]
+    E --> L[slog Events]
+    S[Atomic State] -.-> P
 ```
 
 ## License
@@ -57,12 +57,11 @@ This project is licensed under the [MIT LICENSE](LICENSE).
 
 ## Author
 
-<img src="https://github.com/pardnchiu.png" align="left" width="96" height="96" style="margin-right: 0.5rem;">
+Just [open an issue](https://github.com/pardnchiu/go-queue/issues/new) to share an idea.
 
-<h4 style="padding-top: 0">邱敬幃 Pardn Chiu</h4>
-
-<a href="mailto:hi@pardn.io">hi@pardn.io</a><br>
-<a href="https://www.linkedin.com/in/pardnchiu">https://www.linkedin.com/in/pardnchiu</a>
+<a href="https://github.com/pardnchiu/go-queue/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=pardnchiu/go-queue&cache_bust=2026-09-21" alt="go-queue contributors" />
+</a>
 
 ***
 

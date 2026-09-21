@@ -5,6 +5,7 @@
 ## Prerequisites
 
 - Go 1.23 or higher
+- No external services (standard library only)
 
 ## Installation
 
@@ -14,12 +15,18 @@
 go get github.com/pardnchiu/go-queue
 ```
 
+```go
+import "github.com/pardnchiu/go-queue/core"
+```
+
+> The `core` sub-package path ships in the first release after v1.1.3; until that tag exists, use `go get github.com/pardnchiu/go-queue@develop`.
+
 ### From Source
 
 ```bash
 git clone https://github.com/pardnchiu/go-queue.git
 cd go-queue
-go test ./...
+go test -race ./...
 ```
 
 ## Usage
@@ -35,184 +42,218 @@ import (
 	"log"
 	"time"
 
-	goQueue "github.com/pardnchiu/go-queue/core"
+	"github.com/pardnchiu/go-queue/core"
 )
 
 func main() {
-	q := goQueue.New(&goQueue.Config{
-		Workers: 4,
-	})
+	q := core.New(&core.Config{Workers: 4})
 
 	ctx := context.Background()
 	if err := q.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	defer func() {
-		if err := q.Shutdown(context.Background()); err != nil {
-			log.Printf("shutdown: %v", err)
-		}
-	}()
 
-	id, err := q.Enqueue(ctx, "", func(ctx context.Context) error {
-		fmt.Println("task running")
-		return nil
+	for i := range 3 {
+		id, err := q.Enqueue(ctx, "", func(ctx context.Context) error {
+			fmt.Println("task", i, "running")
+			return nil
+		})
+		if err != nil {
+			log.Printf("enqueue: %v", err)
+			continue
+		}
+		fmt.Println("enqueued", id)
+	}
+
+	// Drain the queue, waiting at most 10 seconds
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := q.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
+}
+```
+
+### Advanced: Presets, Retry, and Callbacks
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"log"
+	"log/slog"
+	"os"
+	"time"
+
+	"github.com/pardnchiu/go-queue/core"
+)
+
+func main() {
+	// Enable Debug level to see task.promoted / task.timeout_triggered events
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	q := core.New(&core.Config{
+		Workers: 8,
+		Size:    1024,
+		Timeout: 30 * time.Second,
+		Preset: map[string]core.PresetConfig{
+			"payment": {Priority: core.PriorityHigh},
+			"email":   {Priority: core.PriorityNormal},
+			"report":  {Priority: core.PriorityLow, Timeout: 60 * time.Second},
+		},
 	})
-	if err != nil {
+
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	if err := q.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println("enqueued:", id)
-	time.Sleep(100 * time.Millisecond)
-}
-```
 
-### Priority Presets
-
-```go
-q := goQueue.New(&goQueue.Config{
-	Workers: 2,
-	Timeout: 30 * time.Second,
-	Preset: map[string]goQueue.PresetConfig{
-		"urgent": {Priority: goQueue.PriorityImmediate},
-		"batch":  {Priority: goQueue.PriorityLow, Timeout: 60 * time.Second},
+	// Retry up to 5 times on failure, fire the callback on success
+	_, err := q.Enqueue(ctx, "payment", func(ctx context.Context) error {
+		return charge(ctx)
 	},
-})
+		core.WithTaskID("order-1001"),
+		core.WithRetry(5),
+		core.WithCallback(func(id string) {
+			slog.Info("charged", "id", id)
+		}),
+	)
+	if err != nil {
+		log.Printf("enqueue payment: %v", err)
+	}
 
-q.Start(ctx)
+	// WithTimeout overrides the preset-derived timeout (no 15-120s clamp)
+	_, err = q.Enqueue(ctx, "report", func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+			return nil
+		}
+	}, core.WithTimeout(5*time.Minute))
+	if err != nil {
+		log.Printf("enqueue report: %v", err)
+	}
 
-// high priority first
-q.Enqueue(ctx, "urgent", func(ctx context.Context) error {
-	// ...
-	return nil
-})
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := q.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
+	}
+}
 
-q.Enqueue(ctx, "batch", func(ctx context.Context) error {
-	// ...
-	return nil
-})
-```
+var errDeclined = errors.New("card declined")
 
-### Enqueue Options
-
-```go
-id, err := q.Enqueue(ctx, "urgent", func(ctx context.Context) error {
-	// business logic
-	return nil
-},
-	goQueue.WithTaskID("order-123"),
-	goQueue.WithTimeout(10*time.Second),
-	goQueue.WithRetry(2),
-	goQueue.WithCallback(func(id string) {
-		fmt.Println("done:", id)
-	}),
-)
-if err != nil {
-	log.Fatal(err)
+func charge(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errDeclined
 }
 ```
 
-### Graceful Shutdown
+### Behavior Notes
 
-```go
-shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
-
-if err := q.Shutdown(shutdownCtx); err != nil {
-	// timed out: tasks still remaining
-	log.Printf("shutdown: %v", err)
-}
-```
+| Scenario | Behavior |
+|----------|----------|
+| `Enqueue` before `Start` | Allowed; tasks wait in the heap and run by priority once `Start` is called |
+| Task ignores `ctx.Done()` | After the timeout the worker reports an error and moves on, but the task goroutine keeps running until it returns |
+| Task fails and retries during `Shutdown` | The state is already Closed, so re-enqueue fails, `task.retry_failed` is logged, and the task is dropped |
+| The ctx passed to `Start` is cancelled | Every task ctx is cancelled; workers keep running and subsequent tasks fail immediately with `context canceled` |
+| `Shutdown` exceeds its deadline | Cancels every task ctx and returns an error; remaining tasks run with a cancelled ctx |
+| Callback | Runs in its own goroutine only on success; failures, timeouts, and exhausted retries never trigger it |
 
 ## API Reference
 
-### New
+### Construction and Lifecycle
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `New` | `func New(config *Config) *Queue` | Creates a queue; `config` may be `nil`, and zero-value fields take defaults |
+| `Start` | `func (q *Queue) Start(ctx context.Context) error` | Launches `Workers` workers; `ctx` is the parent of every task ctx |
+| `Enqueue` | `func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx context.Context) error, options ...EnqueueOption) (string, error)` | Pushes a task and returns its ID; `ctx` is only checked before enqueueing and is not passed to the task |
+| `Shutdown` | `func (q *Queue) Shutdown(ctx context.Context) error` | Rejects new tasks and waits for workers to drain the queue; returns an error early when `ctx` expires. Repeated calls return `nil` |
+
+### Config
 
 ```go
-func New(config *Config) *Queue
-```
+type Config struct {
+	Workers int
+	Size    int
+	Timeout time.Duration
+	Preset  map[string]PresetConfig
+}
 
-Creates a queue. Pass `nil` for defaults.
-
-| Field | Type | Default | Description |
-|------|------|------|------|
-| `Workers` | `int` | `runtime.NumCPU() * 2` | Worker count |
-| `Size` | `int` | `Workers * 64` | Pending queue capacity |
-| `Timeout` | `time.Duration` | `30 * time.Second` | Base timeout |
-| `Preset` | `map[string]PresetConfig` | empty | Named priority/timeout presets |
-
-### PresetConfig
-
-```go
 type PresetConfig struct {
 	Priority Priority
 	Timeout  time.Duration
 }
 ```
 
-| Field | Description |
-|------|------|
-| `Priority` | Priority level; zero value is `PriorityImmediate` (iota 0) |
-| `Timeout` | When `0`, derived from base `Timeout` by priority |
+| Field | Default | Description |
+|-------|---------|-------------|
+| `Workers` | `runtime.NumCPU() * 2` | Number of concurrent workers |
+| `Size` | `Workers * 64` | Heap capacity (retries included); `Enqueue` errors when full |
+| `Timeout` | `30 * time.Second` | Global base timeout; also sets the promotion thresholds |
+| `Preset` | empty map | Preset name → `PresetConfig` |
+| `PresetConfig.Priority` | `PriorityImmediate` (zero value) | Applies when unset or when the preset name is unknown, including `""` |
+| `PresetConfig.Timeout` | `0` | When `> 0`, replaces `Config.Timeout` as this preset's base timeout |
 
 ### Priority
 
-| Constant | Value | Description |
-|------|----|------|
-| `PriorityImmediate` | 0 | Highest, run first |
-| `PriorityHigh` | 1 | High priority |
-| `PriorityRetry` | 2 | Retry tasks |
-| `PriorityNormal` | 3 | Default |
-| `PriorityLow` | 4 | Lowest; may be promoted after wait |
+Lower values run first; ties break by enqueue (or re-enqueue) time.
 
-### Start
+| Constant | Value | Timeout Multiplier |
+|----------|-------|--------------------|
+| `PriorityImmediate` | `0` | base ÷ 4 |
+| `PriorityHigh` | `1` | base ÷ 2 |
+| `PriorityRetry` | `2` | base ÷ 2 |
+| `PriorityNormal` | `3` | base × 1 |
+| `PriorityLow` | `4` | base × 2 |
 
-```go
-func (q *Queue) Start(ctx context.Context) error
-```
+**Timeout:** `clamp(base × multiplier, 15s, 120s)`, where base is `PresetConfig.Timeout` when `> 0`, otherwise `Config.Timeout`. The multiplier comes from the preset's priority; promotion after enqueue does not change the timeout. `WithTimeout` replaces the result and skips the clamp.
 
-Starts the worker pool. Transitions only from `Created` to `Running`; returns error if already started or closed.
+**Promotion:** checked across the whole heap each time a worker pops a task.
 
-### Enqueue
-
-```go
-func (q *Queue) Enqueue(ctx context.Context, presetName string, action func(ctx context.Context) error, options ...EnqueueOption) (string, error)
-```
-
-Enqueues a task and returns its ID. Errors when the queue is closed, full, or `ctx` is canceled.
+| From | To | Wait Threshold |
+|------|----|----------------|
+| `PriorityLow` | `PriorityNormal` | `clamp(Config.Timeout, 30s, 120s)` |
+| `PriorityNormal` | `PriorityHigh` | `clamp(Config.Timeout × 2, 30s, 120s)` |
 
 ### EnqueueOption
 
 | Option | Signature | Description |
-|------|------|------|
-| `WithTaskID` | `func WithTaskID(id string) EnqueueOption` | Custom task ID; auto UUID if omitted |
-| `WithTimeout` | `func WithTimeout(d time.Duration) EnqueueOption` | Override per-task timeout |
-| `WithCallback` | `func WithCallback(fn func(id string)) EnqueueOption` | Async callback after success |
-| `WithRetry` | `func WithRetry(retryMax ...int) EnqueueOption` | Enable retries; default max 3 when arg omitted |
+|--------|-----------|-------------|
+| `WithTaskID` | `func WithTaskID(id string) EnqueueOption` | Custom task ID; defaults to a UUID v4 |
+| `WithTimeout` | `func WithTimeout(d time.Duration) EnqueueOption` | Overrides this task's timeout |
+| `WithCallback` | `func WithCallback(fn func(id string)) EnqueueOption` | Called with the task ID after success |
+| `WithRetry` | `func WithRetry(retryMax ...int) EnqueueOption` | Enables retry; defaults to 3 retries. Total runs = `retryMax + 1` |
 
-### Shutdown
+Retries re-enter immediately at `PriorityRetry` with no backoff delay.
 
-```go
-func (q *Queue) Shutdown(ctx context.Context) error
-```
+### Errors
 
-Closes the queue, drains pending work, and waits for workers. On `ctx` timeout, returns remaining task count. Idempotent.
+| Source | Message |
+|--------|---------|
+| `Start` | `queue already started`, `queue already closed` |
+| `Enqueue` | `ctx.Err()`, `enqueue failed: staging queue is full`, `enqueue failed: staging queue is closed` |
+| `Shutdown` | `shutdown timeout: N tasks remaining` |
+| Task execution | `task timeout after <d>`, `panic: <value>` |
 
-### Timeout Derivation
+### slog Events
 
-Base is `Config.Timeout` (or preset override), then adjusted by priority and clamped to 15s–120s:
-
-| Priority | Formula |
-|----------|------|
-| Immediate | `timeout / 4` |
-| High / Retry | `timeout / 2` |
-| Normal | `timeout` |
-| Low | `timeout * 2` |
-
-### Priority Promotion
-
-| From | Wait | To |
-|------|----------|------|
-| Low | `clamp(Timeout, 30s, 120s)` | Normal |
-| Normal | `clamp(Timeout*2, 30s, 120s)` | High |
+| Event | Level | Trigger |
+|-------|-------|---------|
+| `task.completed` | Info | Task succeeded |
+| `task.retrying` | Warn | Task failed with retries left |
+| `task.failed` | Error | Task without retry failed |
+| `task.exhausted` | Error | Retries exhausted |
+| `task.retry_failed` | Error | Re-enqueue failed (queue full or closed) |
+| `task.promoted` | Debug | Task promoted |
+| `task.timeout_triggered` | Debug | Task timed out |
 
 ***
 

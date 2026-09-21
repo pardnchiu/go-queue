@@ -6,129 +6,195 @@
 
 ```mermaid
 graph TB
-    App[Application] --> Enqueue[Enqueue]
-    App --> Start[Start]
-    App --> Shutdown[Shutdown]
-    Enqueue --> Pending[Pending Heap]
-    Start --> Workers[Worker Pool]
-    Pending --> Workers
-    Workers --> Execute[Execute / Timeout / Retry]
-    Shutdown --> Pending
-    Shutdown --> Workers
+    C[Caller] -->|New / Start / Shutdown| Q[Queue]
+    C -->|Enqueue + options| Q
+    Q -->|Resolve preset priority and timeout| PR[Priority and Timeout]
+    Q -->|Push| P[pending]
+    P --> H[taskHeap min-heap]
+    P -->|promoteLocked| H
+    Q -->|Spawns N| W[Worker]
+    W -->|Pop| P
+    W --> E[execute]
+    E -->|Failed and retryable → PriorityRetry| P
+    E -->|Success| CB[Callback goroutine]
+    E --> L[slog Events]
+    S[atomic.Uint32 state] -.-> Q
+    S -.-> P
 ```
 
 ## Module: Queue
 
-Public API and lifecycle entry point. Owns config, pending queue, and worker coordination.
+Owns the lifecycle, the worker pool, and single-task execution (timeout, panic recovery, retry decision).
 
 ```mermaid
 graph TB
     subgraph Queue
-        New[New] --> Config[Config / Preset]
-        New --> Pending[pending]
-        Start[Start] --> Workers[worker goroutines]
-        Enqueue[Enqueue] --> Options[EnqueueOption]
-        Enqueue --> Pending
-        Workers --> Execute[execute]
-        Execute --> Retry[setRetry]
-        Retry --> Pending
-        Shutdown[Shutdown] --> Close[pending.Close]
-        Shutdown --> Wait[WaitGroup]
+        N[New<br/>merge default Config] --> ST[Start<br/>CAS Created→Running]
+        ST --> WK[worker × Workers]
+        WK --> EX[execute]
+        EX --> TO[context.WithTimeout]
+        EX --> GR[task goroutine + recover]
+        EX --> RT[setRetry<br/>retryTimes++ / PriorityRetry]
+        EQ[Enqueue<br/>ctx check / apply options / UUID] --> PU[pending.Push]
+        SD[Shutdown<br/>CAS → Closed] --> CL[pending.Close]
+        SD --> WG[wg.Wait or ctx expiry]
+        WG --> CN[cancel root ctx]
     end
-    App[Caller] --> New
-    App --> Start
-    App --> Enqueue
-    App --> Shutdown
+    RT --> PU
+    WK -->|Pop| PD[pending]
+    PU --> PD
+    CL --> PD
 ```
 
 ## Module: pending
 
-Mutex + condition-variable protected priority queue with promotion and close broadcast.
+A bounded priority queue guarded by `sync.Mutex` + `sync.Cond` that enforces capacity, closure, and auto-promotion.
 
 ```mermaid
 graph TB
     subgraph pending
-        Push[Push] --> Heap[taskHeap]
-        Pop[Pop] --> Promote[promoteLocked]
-        Promote --> Heap
-        Pop --> Heap
-        Close[Close] --> Broadcast[cond.Broadcast]
-        Len[Len] --> Heap
+        PS[Push] --> CK{State Closed?}
+        CK -->|Yes| E1[staging queue is closed]
+        CK -->|No| SZ{heap len ≥ Size?}
+        SZ -->|Yes| E2[staging queue is full]
+        SZ -->|No| HP[heap.Push + cond.Signal]
+        PO[Pop] --> LP{Closed and heap empty?}
+        LP -->|Yes| EXIT[return ok=false]
+        LP -->|No| PM[promoteLocked]
+        PM --> HN{Heap non-empty?}
+        HN -->|Yes| POP[heap.Pop returns task and promotion events]
+        HN -->|No, Closed| EXIT
+        HN -->|No| WT[cond.Wait]
+        WT --> LP
+        CLS[Close] --> BC[cond.Broadcast]
     end
-    Queue[Queue] --> Push
-    Queue --> Pop
-    Queue --> Close
+    BC -.->|wake| WT
+    HP -.->|wake| WT
 ```
 
 ## Module: taskHeap
 
-`container/heap` ordered by priority then `startAt`, with capacity shrink on pop.
+A min-heap implementing `container/heap.Interface` that shrinks its backing slice when length falls far below capacity.
 
 ```mermaid
 classDiagram
     class task {
-        +string ID
-        +string preset
-        +Priority priority
-        +func action
-        +Duration timeout
-        +func callback
-        +Time startAt
-        +bool retryOn
-        +int retryMax
-        +int retryTimes
+        ID string
+        preset string
+        priority Priority
+        action func(ctx) error
+        timeout time.Duration
+        callback func(id string)
+        startAt time.Time
+        retryOn bool
+        retryMax int
+        retryTimes int
     }
     class taskHeap {
-        +taskHeaps tasks
-        +int minCap
-        +Len()
-        +Less()
-        +Swap()
-        +Push()
-        +Pop()
+        tasks []*task
+        minCap int
+        Len() int
+        Less(i, j) bool
+        Swap(i, j)
+        Push(x)
+        Pop() any
     }
-    taskHeap --> task : holds
+    taskHeap o-- task
+```
+
+| Rule | Detail |
+|------|--------|
+| Ordering | Lower `priority` first; ties break on earlier `startAt` |
+| Shrink condition | `cap > minCap × 4` and `len < cap / 8` |
+| Shrink target | `max(cap / 4, minCap)` |
+| `minCap` | `max(16, min(Size / 8, Size / Workers))` |
+
+## Module: Priority and Timeout
+
+Two derivations on `Config`: `getQueueTimeout` fixes a task's timeout at enqueue, and `getPromotion` fixes promotion thresholds at construction.
+
+```mermaid
+graph LR
+    subgraph Timeout Resolution
+        B{PresetConfig.Timeout > 0?} -->|Yes| B1[base = Preset.Timeout]
+        B -->|No| B2[base = Config.Timeout]
+        B1 --> M[Apply multiplier by preset priority]
+        B2 --> M
+        M --> CP[clamp 15s–120s]
+        CP --> O{WithTimeout set?}
+        O -->|Yes| OV[Use WithTimeout value]
+        O -->|No| RS[Use clamped value]
+    end
+```
+
+```mermaid
+graph LR
+    L[PriorityLow] -->|wait ≥ clamp Timeout, 30s, 120s| N[PriorityNormal]
+    N -->|wait ≥ clamp Timeout×2, 30s, 120s| H[PriorityHigh]
+    R[PriorityRetry] -.->|never promoted| R
 ```
 
 ## Data Flow
 
 ```mermaid
 sequenceDiagram
-    participant App as Application
+    participant C as Caller
     participant Q as Queue
     participant P as pending
     participant W as Worker
-    participant T as task action
-
-    App->>Q: New(config)
-    App->>Q: Start(ctx)
-    Q->>W: spawn workers
-    App->>Q: Enqueue(preset, action, opts)
+    participant T as Task goroutine
+    C->>Q: Enqueue(ctx, preset, action, opts)
+    Q->>Q: Resolve timeout / generate ID
     Q->>P: Push(task)
-    P-->>W: Pop(task, promotions)
+    P-->>W: cond.Signal
+    W->>P: Pop()
+    P->>P: promoteLocked()
+    P-->>W: task, promotion events
     W->>T: action(ctx with timeout)
-    alt success
+    alt Success
         T-->>W: nil
-        W->>App: callback(id) async
-    else failure with retry
-        W->>P: Push(PriorityRetry)
-    else failure or timeout
-        W-->>W: slog error
+        W->>C: callback(id) (goroutine)
+    else Failed and retryable
+        T-->>W: err
+        W->>P: Push(task, PriorityRetry)
+    else Timeout
+        W->>W: task timeout after d
+    else Panic
+        T-->>W: panic: v (recovered)
     end
-    App->>Q: Shutdown(ctx)
-    Q->>P: Close()
-    Q->>W: wait WaitGroup
 ```
 
 ## State Machine
 
+### Queue Lifecycle
+
 ```mermaid
 stateDiagram-v2
-    [*] --> Created
-    Created --> Running: Start CAS
-    Running --> Closed: Shutdown CAS
-    Created --> Closed: Shutdown CAS
-    Closed --> Closed: Shutdown idempotent
+    [*] --> Created: New
+    Created --> Running: Start
+    Created --> Closed: Shutdown
+    Running --> Closed: Shutdown
+    Running --> Running: Start (returns already started)
+    Closed --> Closed: Start (returns already closed) / Shutdown (returns nil)
+    Closed --> [*]
+```
+
+### Task Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Pending: Enqueue
+    Pending --> Pending: Auto-promotion
+    Pending --> Running: Pop
+    Running --> Completed: returns nil
+    Running --> Pending: failed and retryTimes < retryMax
+    Running --> Failed: failed without retry
+    Running --> Exhausted: failed and retryTimes ≥ retryMax
+    Running --> Dropped: re-enqueue failed
+    Completed --> [*]
+    Failed --> [*]
+    Exhausted --> [*]
+    Dropped --> [*]
 ```
 
 ***
