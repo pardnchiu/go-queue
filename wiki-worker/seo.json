@@ -1,0 +1,105 @@
+{
+  "home_title": {
+    "en": "Go Priority Task Queue with Worker Pool - pardnchiu/go-queue",
+    "zh": "Golang 任務佇列：優先權排程與 Worker Pool｜go-queue"
+  },
+  "descriptions": {
+    "en": {
+      "home": "pardnchiu/go-queue is a Go priority task queue by Pardn Chiu (邱敬幃): bounded worker pool, five priority levels, anti-starvation promotion, retries.",
+      "getting-started": "Install go-queue with go get, start a worker pool, enqueue your first task, and drain the queue under a Shutdown deadline.",
+      "core-concepts": "Map of go-queue scheduling rules and where tasks live: an in-process priority task queue whose heap is held in memory, not persisted.",
+      "core-concepts-priority": "go-queue's five priority levels, FIFO tie-breaking on enqueue time, and why an unknown preset name runs at PriorityImmediate.",
+      "core-concepts-promotion": "How go-queue promotes Low and Normal tasks after a wait threshold clamped to 30-120s, and when promotion does not run.",
+      "core-concepts-timeout": "How go-queue derives a per-task timeout: base timeout, priority multiplier, the 15-120s clamp, and the WithTimeout override.",
+      "core-concepts-execution": "How a go-queue worker runs a task: timeout ctx, panic recovery, success callbacks, and immediate retries at PriorityRetry.",
+      "core-concepts-lifecycle": "go-queue's Created, Running, and Closed states, which calls each allows, and how Shutdown drains the heap before its deadline.",
+      "architecture": "System overview of go-queue: Queue lifecycle, the mutex-guarded pending heap, worker pool, retry re-enqueue path, and atomic state.",
+      "configuration": "go-queue Config fields and defaults: worker count, heap size, base timeout, preset map, and how zero or nil values resolve.",
+      "configuration-presets": "Define go-queue presets with PresetConfig to set each task's priority and base timeout, with a worked example of effective values.",
+      "api-reference": "go-queue core API: New, Start, Enqueue, and Shutdown signatures and semantics, plus the Config, PresetConfig, and Priority types.",
+      "api-reference-options": "go-queue EnqueueOption functions WithTaskID, WithTimeout, WithCallback, and WithRetry: defaults, effects, and ordering.",
+      "api-reference-errors": "Every error go-queue returns or logs, what triggers it, and how to match ctx, full-queue, and closed-queue errors in Go.",
+      "api-reference-events": "The seven slog events go-queue emits, their levels and fields, and how to enable Debug-level promotion and timeout events.",
+      "removed-api": "Symbols removed from go-queue: the root package moved to github.com/pardnchiu/go-queue/core, with versions and migration steps."
+    },
+    "zh": {
+      "home": "pardnchiu/go-queue 是邱敬幃（Pardn Chiu）開發的 Go 優先權任務佇列：有界 worker pool、五級優先權、防飢餓升級與重試。",
+      "getting-started": "以 go get 安裝 go-queue，啟動 Worker 池、送出第一個任務，並在期限內排空佇列完成關閉。",
+      "core-concepts": "go-queue 排程規則地圖與任務存放位置：程序內優先權任務佇列，任務只存在記憶體、不持久化。",
+      "core-concepts-priority": "go-queue 的五級優先權、同級依入列時間先進先出，以及未知 Preset 為何以 PriorityImmediate 執行。",
+      "core-concepts-promotion": "go-queue 如何在等待超過 30–120 秒門檻後升級 Low 與 Normal 任務，以及升級不會執行的情況。",
+      "core-concepts-timeout": "go-queue 單一任務逾時的推算：基準逾時、優先權倍率、15–120 秒上下限與 WithTimeout 覆寫。",
+      "core-concepts-execution": "go-queue Worker 執行任務的方式：逾時 ctx、panic 恢復、成功 Callback，以及以 PriorityRetry 立即重試。",
+      "core-concepts-lifecycle": "go-queue 的 Created、Running、Closed 三狀態，各狀態允許的呼叫，以及 Shutdown 如何在期限內排空。",
+      "architecture": "go-queue 系統概覽：Queue 生命週期、互斥鎖保護的 pending 堆、Worker 池、重試回流路徑與原子狀態。",
+      "configuration": "go-queue Config 欄位與預設值：Worker 數、堆容量、基準逾時、Preset map，以及零值與 nil 的解析。",
+      "configuration-presets": "以 PresetConfig 定義 go-queue Preset，設定任務優先權與基準逾時，並附實際生效值的範例。",
+      "api-reference": "go-queue core API：New、Start、Enqueue、Shutdown 的簽章與語意，及 Config、Priority 等型別。",
+      "api-reference-options": "go-queue 的 EnqueueOption：WithTaskID、WithTimeout、WithCallback、WithRetry 的效果與順序。",
+      "api-reference-errors": "go-queue 回傳或記錄的所有錯誤、觸發條件，以及在 Go 中比對 ctx、佇列已滿與已關閉錯誤的方式。",
+      "api-reference-events": "go-queue 發出的七個 slog 事件、等級與欄位，以及如何開啟 Debug 等級的升級與逾時事件。",
+      "removed-api": "go-queue 已移除的符號：根套件搬至 github.com/pardnchiu/go-queue/core，含版本與遷移步驟。"
+    }
+  },
+  "keywords": {
+    "en": {
+      "home": "worker pool, task queue, priority queue, Go priority task queue, goroutine, pardnchiu, Pardn Chiu, 邱敬幃",
+      "getting-started": "go-queue install, go get, golang worker pool example, graceful shutdown",
+      "core-concepts": "go-queue concepts, task scheduling, in-process task queue, priority queue rules",
+      "core-concepts-priority": "task priority levels, min-heap, FIFO tie-break, PriorityImmediate",
+      "core-concepts-promotion": "anti-starvation, priority promotion, task aging",
+      "core-concepts-timeout": "task timeout, per-task timeout, timeout clamp, WithTimeout",
+      "core-concepts-execution": "panic recovery, task retry, callback, context timeout",
+      "core-concepts-lifecycle": "graceful shutdown, queue state, atomic state machine",
+      "architecture": "go-queue architecture, min-heap, sync.Cond, worker pool, atomic state machine",
+      "configuration": "go-queue Config, workers, queue size, timeout defaults",
+      "configuration-presets": "go-queue PresetConfig, named presets, priority, timeout",
+      "api-reference": "go-queue API, New, Start, Enqueue, Shutdown",
+      "api-reference-options": "EnqueueOption, WithRetry, WithTimeout, WithCallback, WithTaskID",
+      "api-reference-errors": "go-queue errors, queue full, queue closed, errors.Is",
+      "api-reference-events": "slog events, structured logging, task.completed, task.promoted",
+      "removed-api": "go-queue migration, removed API, core package import path"
+    },
+    "zh": {
+      "home": "Go 優先權任務佇列, golang worker pool, priority queue, 任務佇列, 優先佇列, pardnchiu, Pardn Chiu, 邱敬幃",
+      "core-concepts": "go-queue 核心概念, 任務排程, 程序內任務佇列, 優先權規則"
+    }
+  },
+  "brand_keywords": [],
+  "person": {
+    "id": "https://pardn.io/#pardnchiu",
+    "name": "Pardn Chiu",
+    "alt_names": [
+      "邱敬幃",
+      "Chiu Ching-Wei",
+      "pardnchiu"
+    ],
+    "same_as": [
+      "https://pardn.io/",
+      "https://www.linkedin.com/in/pardnchiu",
+      "https://github.com/pardnchiu",
+      "https://dev.to/pardnchiu",
+      "https://x.com/pardnchiu"
+    ]
+  },
+  "organization": {
+    "id": "https://pardn.io/#organization",
+    "url": "https://pardn.io/",
+    "name": "Pardn Co., Ltd",
+    "name_zh": "帕登國際有限公司",
+    "same_as": [
+      "https://github.com/pardnio"
+    ]
+  },
+  "tagline": "Taiwan · Infrastructure Engineering",
+  "og_image": "https://pardn.io/logo.jpg",
+  "favicon": "/favicon.png",
+  "x_default": "",
+  "ai_usage": {
+    "train": "y",
+    "input": "y",
+    "search": "y"
+  },
+  "programming_language": "Go",
+  "license_url": "https://opensource.org/licenses/MIT"
+}
