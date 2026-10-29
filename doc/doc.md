@@ -1,5 +1,7 @@
 # go-queue - Documentation
 
+Last updated: 2026-09-21
+
 > Back to [README](../README.md)
 
 ## Prerequisites

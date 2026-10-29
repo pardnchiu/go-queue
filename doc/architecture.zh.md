@@ -1,5 +1,7 @@
 # go-queue - 架構
 
+最後更新：2026-09-21
+
 > 返回 [README](./README.zh.md)
 
 ## 概覽

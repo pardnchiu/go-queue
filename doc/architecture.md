@@ -1,5 +1,7 @@
 # go-queue - Architecture
 
+Last updated: 2026-09-21
+
 > Back to [README](../README.md)
 
 ## Overview

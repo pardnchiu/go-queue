@@ -1,3 +1,5 @@
+最後更新：2026-10-07
+
 > [!NOTE]
 > 此 README 由 [SKILL](https://github.com/agenvoy/skill-readme-generate) 生成，英文版請參閱 [這裡](../README.md)。
 
@@ -11,12 +13,11 @@
 <a href="https://pkg.go.dev/github.com/pardnchiu/go-queue"><img src="https://img.shields.io/badge/GO-REFERENCE-blue?include_prereleases&style=for-the-badge" alt="Go Reference"></a>
 <a href="https://github.com/pardnchiu/go-queue/releases"><img src="https://img.shields.io/github/v/tag/pardnchiu/go-queue?include_prereleases&style=for-the-badge" alt="Release"></a>
 <a href="../LICENSE"><img src="https://img.shields.io/github/license/pardnchiu/go-queue?include_prereleases&style=for-the-badge" alt="License"></a>
-<a href="https://app.codecov.io/github/pardnchiu/go-queue/tree/develop"><img src="https://img.shields.io/codecov/c/github/pardnchiu/go-queue/develop?include_prereleases&style=for-the-badge" alt="Coverage"></a>
 </p>
 
 ***
 
-> Go 優先權任務佇列，具備防飢餓自動升級、依優先權縮放的逾時與優雅排空關閉
+> Go 任務佇列，具備優先佇列排程、有界 worker pool 與防飢餓自動升級
 
 ## 目錄
 
@@ -60,7 +61,7 @@ graph TB
 Just [open an issue](https://github.com/pardnchiu/go-queue/issues/new) to share an idea.
 
 <a href="https://github.com/pardnchiu/go-queue/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=pardnchiu/go-queue&cache_bust=2026-09-21" alt="go-queue contributors" />
+  <img src="https://contrib.rocks/image?repo=pardnchiu/go-queue&cache_bust=2026-10-07" alt="go-queue contributors" />
 </a>
 
 ***
