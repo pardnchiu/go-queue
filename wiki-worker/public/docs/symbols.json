@@ -1,0 +1,77 @@
+[
+  {
+    "package": "core",
+    "name": "Config",
+    "kind": "type"
+  },
+  {
+    "package": "core",
+    "name": "EnqueueOption",
+    "kind": "type"
+  },
+  {
+    "package": "core",
+    "name": "WithCallback",
+    "kind": "func"
+  },
+  {
+    "package": "core",
+    "name": "WithRetry",
+    "kind": "func"
+  },
+  {
+    "package": "core",
+    "name": "WithTaskID",
+    "kind": "func"
+  },
+  {
+    "package": "core",
+    "name": "WithTimeout",
+    "kind": "func"
+  },
+  {
+    "package": "core",
+    "name": "PresetConfig",
+    "kind": "type"
+  },
+  {
+    "package": "core",
+    "name": "Priority",
+    "kind": "type"
+  },
+  {
+    "package": "core",
+    "name": "PriorityImmediate",
+    "kind": "const-or-var"
+  },
+  {
+    "package": "core",
+    "name": "PriorityHigh",
+    "kind": "const-or-var"
+  },
+  {
+    "package": "core",
+    "name": "PriorityRetry",
+    "kind": "const-or-var"
+  },
+  {
+    "package": "core",
+    "name": "PriorityNormal",
+    "kind": "const-or-var"
+  },
+  {
+    "package": "core",
+    "name": "PriorityLow",
+    "kind": "const-or-var"
+  },
+  {
+    "package": "core",
+    "name": "Queue",
+    "kind": "type"
+  },
+  {
+    "package": "core",
+    "name": "New",
+    "kind": "func"
+  }
+]
