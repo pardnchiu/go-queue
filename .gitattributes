@@ -9,3 +9,5 @@
 *.md linguist-documentation
 *.txt linguist-documentation
 LICENSE linguist-documentation
+doc/** linguist-documentation
+wiki-worker/** linguist-documentation
