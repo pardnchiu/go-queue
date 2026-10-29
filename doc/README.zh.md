@@ -13,6 +13,7 @@
 <a href="https://pkg.go.dev/github.com/pardnchiu/go-queue"><img src="https://img.shields.io/badge/GO-REFERENCE-blue?include_prereleases&style=for-the-badge" alt="Go Reference"></a>
 <a href="https://github.com/pardnchiu/go-queue/releases"><img src="https://img.shields.io/github/v/tag/pardnchiu/go-queue?include_prereleases&style=for-the-badge" alt="Release"></a>
 <a href="../LICENSE"><img src="https://img.shields.io/github/license/pardnchiu/go-queue?include_prereleases&style=for-the-badge" alt="License"></a>
+<a href="https://app.codecov.io/github/pardnchiu/go-queue/tree/develop"><img src="https://img.shields.io/codecov/c/github/pardnchiu/go-queue/develop?include_prereleases&style=for-the-badge" alt="Coverage"></a>
 </p>
 
 ***
