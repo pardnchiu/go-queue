@@ -1,13 +1,13 @@
 {
   "en:home": {
-    "hash": "41a6066fd855e3b33d486e8e2095389b4f6d730e2f0176d40546f3e890b38dd5",
+    "hash": "500280dab67d74c2c505299a3f513dce7041b8e58348bf1c24314b3fa648f02c",
     "published": "2026-10-02",
-    "modified": "2026-10-21"
+    "modified": "2026-10-30"
   },
   "zh:home": {
-    "hash": "ab8802e3f7e1de65367b0f1cff99aaa51afb2052ca55759d61b842bdf0d009a0",
+    "hash": "de23fb81e56378b84fb552723778af5a42558c295ef132ef3a9395b89b839de8",
     "published": "2026-10-02",
-    "modified": "2026-10-29"
+    "modified": "2026-10-30"
   },
   "en:getting-started": {
     "hash": "f87a275c08d9504cdb6c7aab18ecf413998d5e689ab7968f66cdc57496238f68",
